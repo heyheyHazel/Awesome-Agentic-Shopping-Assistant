@@ -1,5 +1,8 @@
+"""Agent base class: timeout, retry with exponential backoff, and graceful fallback."""
+
 from __future__ import annotations
 
+import asyncio
 import time
 from abc import ABC, abstractmethod
 from typing import Any
@@ -13,35 +16,26 @@ logger = structlog.get_logger()
 
 
 class BaseAgent(ABC):
-    """All agents inherit from this base class with retry, timeout, and fallback."""
+    """All agents inherit from this base class."""
 
     def __init__(self, name: str, timeout: float = 10.0, max_retries: int = 2):
         self.name = name
         self.timeout = timeout
         self.max_retries = max_retries
-        self._call_count = 0
-        self._error_count = 0
 
     @abstractmethod
     async def _execute(self, **kwargs: Any) -> AgentResult:
         """Core logic implemented by each concrete agent."""
 
     async def run(self, **kwargs: Any) -> AgentResult:
-        """Public entry: wraps _execute with timing, retries, and fallback."""
+        """Entry point: wraps _execute with timing, retries, and fallback."""
         start = time.perf_counter()
-        self._call_count += 1
-
         try:
             result = await self._retry_execute(**kwargs)
             result.latency_ms = (time.perf_counter() - start) * 1000
-            logger.info(
-                "agent.success",
-                agent=self.name,
-                latency_ms=round(result.latency_ms, 1),
-            )
+            logger.info("agent.success", agent=self.name, latency_ms=round(result.latency_ms, 1))
             return result
         except Exception as exc:
-            self._error_count += 1
             latency_ms = (time.perf_counter() - start) * 1000
             logger.error("agent.failed", agent=self.name, error=str(exc))
             return self._fallback(latency_ms, exc)
@@ -52,8 +46,8 @@ class BaseAgent(ABC):
             wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
             reraise=True,
         )
-        async def _inner():
-            return await self._execute(**kwargs)
+        async def _inner() -> AgentResult:
+            return await asyncio.wait_for(self._execute(**kwargs), timeout=self.timeout)
 
         return await _inner()
 
@@ -64,11 +58,4 @@ class BaseAgent(ABC):
             success=False,
             latency_ms=latency_ms,
             error=str(exc),
-            confidence=0.0,
         )
-
-    @property
-    def error_rate(self) -> float:
-        if self._call_count == 0:
-            return 0.0
-        return self._error_count / self._call_count

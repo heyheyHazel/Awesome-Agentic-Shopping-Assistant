@@ -1,79 +1,31 @@
-"""A/B测试引擎单元测试"""
+"""A/B engine: stable assignment, conversion stats, and Thompson Sampling."""
 
-import sys
-import os
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from services.ab_test import ABTestEngine, Experiment, ExperimentGroup
+from services.ab_test import ABTestEngine
 
 
-def test_consistent_assignment():
-    """Same user always gets the same group."""
+def test_assignment_is_stable_per_user():
     engine = ABTestEngine()
-    group1 = engine.assign("user_001")
-    group2 = engine.assign("user_001")
-    assert group1["group"] == group2["group"]
+    assert engine.assign("U001") == engine.assign("U001")
+    assert engine.assign("U001") in {"A", "B"}
 
 
-def test_distribution():
-    """Check rough distribution balance across many users."""
+def test_info_reports_seeded_conversion_rates():
+    info = ABTestEngine().info("U001")
+    rates = {v.name: v.conversion_rate for v in info.variants}
+    assert rates["A"] == 62.7
+    assert rates["B"] == 74.3
+    assert info.winner == "B"
+    assert info.variant in {"A", "B"}
+
+
+def test_thompson_sampling_prefers_the_winning_arm():
     engine = ABTestEngine()
-    counts: dict[str, int] = {}
-    for i in range(1000):
-        result = engine.assign(f"user_{i}")
-        grp = result["group"]
-        counts[grp] = counts.get(grp, 0) + 1
-
-    for grp, count in counts.items():
-        assert 300 < count < 700, f"Group {grp} has {count} users — too skewed"
+    wins = sum(1 for _ in range(200) if engine.sample() == "B")
+    assert wins > 120
 
 
-def test_thompson_sampling():
-    """Thompson sampling updates posterior correctly."""
+def test_record_outcome_updates_posterior():
     engine = ABTestEngine()
-    for _ in range(100):
-        engine.record_outcome("rec_strategy", "treatment_llm", True)
-    for _ in range(100):
-        engine.record_outcome("rec_strategy", "control", False)
-
-    exp = engine.experiments["rec_strategy"]
-    treatment = next(g for g in exp.groups if g.name == "treatment_llm")
-    control = next(g for g in exp.groups if g.name == "control")
-    assert treatment.successes > control.successes
-
-
-def test_custom_experiment():
-    engine = ABTestEngine()
-    engine.register_experiment(
-        Experiment(
-            id="prompt_test",
-            name="Prompt模板实验",
-            groups=[
-                ExperimentGroup(name="template_a", weight=30),
-                ExperimentGroup(name="template_b", weight=70),
-            ],
-        )
-    )
-    result = engine.assign("user_999", "prompt_test")
-    assert result["group"] in ("template_a", "template_b")
-
-
-def test_metrics_recording():
-    engine = ABTestEngine()
-    engine.record_metric("rec_strategy", "control", "ctr", 0.05, "user_001")
-    engine.record_metric("rec_strategy", "control", "ctr", 0.08, "user_002")
-    engine.record_metric("rec_strategy", "treatment_llm", "ctr", 0.12, "user_003")
-
-    stats = engine.get_stats("rec_strategy")
-    assert "control" in stats
-    assert stats["control"]["ctr"]["count"] == 2
-
-
-if __name__ == "__main__":
-    test_consistent_assignment()
-    test_distribution()
-    test_thompson_sampling()
-    test_custom_experiment()
-    test_metrics_recording()
-    print("All A/B test engine tests passed!")
+    before = engine.info().variants[1].trials
+    engine.record_outcome("B", success=True)
+    assert engine.info().variants[1].trials == before + 1

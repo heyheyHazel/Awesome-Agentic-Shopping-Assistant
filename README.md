@@ -1,234 +1,197 @@
-# Multi-Agent E-Commerce System
+# Multi-Agent E-commerce Assistant
 
-基于 Multi-Agent 协作的电商导购与推荐系统。Supervisor 编排 5 个专业 Agent，完成「对话意图解析 → 用户画像 → 商品召回 → LLM 精排 → 库存校验 → 文案生成」全流程，后端为 FastAPI，前端为 React，支持 SSE 流式对话。
+基于 **LangGraph** 的多 Agent 电商导购系统：Supervisor 用 LLM 动态规划每个请求要跑哪些 Agent，画像、召回、重排、库存、文案各司其职，全部过程通过 SSE 实时推送到前端仪表盘。后端 FastAPI，前端 React 19 + TypeScript。
+
+## 亮点
+
+- **Supervisor 动态调度**：LLM 输出结构化执行计划（意图 + 检索参数 + 要运行的 Agent 子集），简单问题跳过画像/文案等阶段，不是写死的流水线
+- **并行流水线**：`画像 ∥ 召回 → LLM 重排 ∥ 库存校验 → 聚合 → 文案 → 流式总结`，LangGraph 原生扇出/汇合
+- **全程实时流**：Agent 状态、商品卡片、文案、库存、逐字回复都以事件流推送，前端三栏同步刷新
+- **对话记忆**：LangGraph Checkpointer 按 `thread_id` 保存上下文，支持「便宜点的」「那白色的呢」这类追问
+- **工具调用**：通用问答复用一个 tool-calling Agent（`search_catalog` / `get_shopper_profile`），回答基于真实目录数据
+- **跨服务商的结构化输出**：`JsonStructured`（JSON 模式 + schema 注入），同时兼容 OpenAI 与 DeepSeek thinking 模型
+- **稳健性**：每个 Agent 独立超时熔断、指数退避重试、失败降级（重排挂了就按召回顺序继续）
+- **A/B 测试**：一致性哈希分桶 + Thompson Sampling 动态调权
+
+## 界面布局
+
+三栏实时仪表盘：
+
+| 区域 | 内容 |
+|------|------|
+| 左栏 | 4 个 Agent 状态卡片（空闲 / 运行中 / 完成）+ 技术栈 |
+| 中栏 | 对话流：Supervisor 回复、商品卡片（Best Match / High Rated / Great Value）、文案、库存徽章、逐字流式总结；底部输入框 + SSE 连接状态 |
+| 右栏 | 用户画像（VIP、RFM Segment、R/F/M 数值）、RFM 客群聚类、A/B 实验面板（转化率 + Winner）、响应耗时（含各 Agent 分解） |
 
 ## 系统架构
 
 ```mermaid
-graph TB
-    USER["用户在对话框输入<br/>推荐一款200元以下的口红"] --> FRONT["React 前端<br/>SSE 消费 products / token / done 事件"]
-    FRONT --> API["FastAPI<br/>POST /api/v1/chat"]
-    API --> CHAT["ChatAgent<br/>LLM 解析购物意图"]
-    CHAT -->|product_search| SUP["Supervisor 编排器"]
-    CHAT -->|general_question| REPLY["直接生成文本回复"]
+graph TD
+    START([用户消息]) --> SUP["Supervisor Agent<br/>结构化计划：intent + 检索参数 + agents 子集"]
+    SUP -->|"general"| CHAT["Chat Agent<br/>工具调用：search_catalog / get_shopper_profile"]
+    SUP -->|"product_search"| PROFILE["Profile Agent<br/>RFM 画像（可选）"]
+    SUP -->|"product_search"| RECALL["Recall<br/>目录关键词/预算过滤"]
+    PROFILE --> RERANK["Rerank Agent<br/>LLM 结构化排序"]
+    RECALL --> RERANK
+    RERANK --> AGG["Aggregate<br/>库存过滤 → Top-3"]
+    RECALL --> INV["Inventory Agent<br/>库存 + 限购"]
+    INV --> AGG
+    AGG -->|"plan 含 copy"| COPY["Copy Agent<br/>分群文案"]
+    AGG -->|"跳过"| RESP["Respond<br/>token 流式总结"]
+    COPY --> RESP
+    CHAT --> DONE([SSE 事件流])
+    RESP --> DONE
 
-    subgraph P1["Phase 1 · 并行"]
-        PROFILE["UserProfileAgent<br/>用户画像"]
-        RECALL["ProductRecAgent<br/>商品召回"]
-    end
-
-    subgraph P2["Phase 2 · 并行"]
-        RERANK["ProductRecAgent<br/>LLM 精排"]
-        INVENTORY["InventoryAgent<br/>库存校验"]
-    end
-
-    subgraph P3["Phase 3 · 串行"]
-        AGG["结果聚合<br/>库存过滤 + 排序合并"]
-        COPY["MarketingCopyAgent<br/>个性化文案"]
-        AB["A/B 测试引擎"]
-    end
-
-    SUP --> PROFILE
-    SUP --> RECALL
-    PROFILE & RECALL --> RERANK & INVENTORY
-    RERANK & INVENTORY --> AGG
-    AGG --> COPY
-    COPY --> AB
-    AB --> SSE["SSE 流式响应<br/>products → token → done"]
-    REPLY --> SSE
-
-    style CHAT fill:#fff3e0
     style SUP fill:#e3f2fd
-    style SSE fill:#c8e6c9
+    style RERANK fill:#e8f5e9
+    style COPY fill:#fff3e0
 ```
 
-除聊天入口外，还提供两个直接调用入口：`POST /api/v1/recommend`（Supervisor 编排）与 `POST /api/v1/recommend/graph`（LangGraph 状态图）。
+## Agent 一览
 
-## 核心 Agent
-
-| Agent | 职责 | 文件 |
-|-------|------|------|
-| ChatAgent | 解析多轮对话中的购物意图，分流闲聊与购物咨询，委托 Supervisor 推荐 | `python/agents/chat_agent.py` |
-| UserProfileAgent | 基于用户行为数据（浏览、购买等）生成结构化画像与 RFM 分群 | `python/agents/user_profile_agent.py` |
-| ProductRecAgent | 关键词/类目过滤召回候选商品，再用 LLM 精排出 TopN | `python/agents/product_rec_agent.py` |
-| InventoryAgent | 过滤缺货商品，输出库存预警与动态限购策略 | `python/agents/inventory_agent.py` |
-| MarketingCopyAgent | 按用户分群选择文案模板生成个性化文案，并做广告法敏感词过滤 | `python/agents/marketing_copy_agent.py` |
-
-### 编排方式
-
-Supervisor 采用「并行分发 + 聚合」模式，按依赖关系分三阶段执行：
-
-1. **Phase 1（并行）**：用户画像 与 商品召回互不依赖，同时执行；
-2. **Phase 2（并行）**：画像驱动的 LLM 精排 与 库存校验同时执行；
-3. **Phase 3（串行）**：聚合最终商品列表后生成营销文案。
-
-`asyncio.gather()` 使每阶段的耗时约等于最慢 Agent 的耗时，而非相加。
-
-### Agent 基类
-
-所有 Agent 继承 `BaseAgent`，由基类统一提供：
-
-- **超时控制**：每个 Agent 按配置超时，互不影响；
-- **指数退避重试**：失败后按 0.5s → 1s → 2s 重试；
-- **降级（Fallback）**：重试耗尽后返回降级结果，保证系统不崩溃。
-
-子类只需实现 `_execute()` 方法。
-
-### A/B 测试
-
-`services/ab_test.py` 内置两级能力：
-
-- **一致性哈希分桶**：同一用户始终进入同一实验组；
-- **Thompson Sampling**：根据点击反馈更新 Beta 分布，动态向效果更好的实验组倾斜流量。
+| Agent | 类型 | 职责 | 实现 |
+|-------|------|------|------|
+| `SupervisorAgent` | LLM 结构化输出 | 意图路由 + 动态调度计划 | `agents/supervisor_agent.py` |
+| `UserProfileAgent` | 确定性计算 | RFM 打分 + 客群分类 | `agents/user_profile_agent.py` |
+| `ProductRecAgent` | 规则 + LLM | 目录召回 + LLM 重排 | `agents/product_rec_agent.py` |
+| `InventoryAgent` | 确定性计算 | 缺货过滤、低库存预警、限购 | `agents/inventory_agent.py` |
+| `MarketingCopyAgent` | LLM 结构化输出 | 按客群生成商品文案 | `agents/marketing_copy_agent.py` |
+| `ChatAgent` | LLM 工具调用 | 通用问答（目录/画像工具） | `agents/chat_agent.py` |
 
 ## 快速开始
 
 ### 环境要求
 
-- Python 3.11+
-- Node.js 18+（前端）
+- Python 3.12+
+- Node.js 20+
 - 任意 OpenAI 兼容 LLM 接口的 API Key
 
-### 1. 启动后端
+### 1. 后端
 
 ```bash
 cd python
 
-# 创建独立环境（conda 或 venv 均可）
-conda create -n agent python=3.11 -y
+conda create -n agent python=3.12 -y
 conda activate agent
+pip install -r requirements-dev.txt   # 含 pytest
 
-pip install -r requirements.txt
-```
-
-### 2. 配置环境变量
-
-```bash
 cp .env.example .env
+# 编辑 .env，填入 API Key / 服务地址 / 模型名
+python main.py                        # http://localhost:8000
 ```
 
-编辑 `.env`，至少填写 API Key（接口地址和模型名填写你所用服务的）：
+> **DeepSeek 用户**：thinking 模型会拖慢结构化调用（实测 10s → 1.4s）且不支持强制 tool_choice，
+> 请在 `.env` 中设置 `ECOM_LLM_DISABLE_THINKING=true`，项目会自动关闭隐藏推理。
 
-```env
-ECOM_LLM_API_KEY=你的API密钥
-ECOM_LLM_BASE_URL=https://api.openai.com/v1
-ECOM_LLM_MODEL=gpt-4o-mini
-```
-
-### 3. 启动服务
-
-```bash
-python main.py
-```
-
-启动成功后：
-
-- API 服务：http://localhost:8000
-- Swagger 文档：http://localhost:8000/docs
-
-### 4. 启动前端
-
-另开一个终端：
+### 2. 前端
 
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev                           # http://localhost:5173
 ```
 
-浏览器打开 http://localhost:5173 ，在对话框输入「推荐一款口红」即可体验。
+浏览器打开 http://localhost:5173 ，试试输入 `I want running shoes for daily training under $120.`
 
-### 5. 运行单元测试
+### 3. 测试
 
-测试不依赖 LLM API，也不需要启动服务：
+15 个单元测试与集成测试全部使用桩 LLM，不需要 API Key：
 
 ```bash
 cd python
-pip install pytest pytest-asyncio
 pytest tests/ -v
 ```
 
-## API 接口
+### 4. Docker
+
+```bash
+export ECOM_LLM_API_KEY=你的密钥
+docker compose up -d                  # API: http://localhost:8000
+```
+
+## API
 
 | 方法 | 路径 | 说明 |
-| ---- | ---- | ---- |
+|------|------|------|
 | GET | `/health` | 健康检查 |
-| POST | `/api/v1/recommend` | Supervisor 编排推荐 |
-| POST | `/api/v1/recommend/graph` | LangGraph 状态图推荐 |
-| POST | `/api/v1/chat` | 聊天式推荐（SSE 流式） |
-| GET | `/api/v1/experiments` | A/B 实验状态 |
-| GET | `/api/v1/metrics` | 系统监控指标 |
-| POST | `/api/v1/experiments/{id}/outcome` | 记录 A/B 测试结果 |
+| POST | `/api/v1/chat` | 聊天入口，SSE 事件流 |
+| POST | `/api/v1/recommend` | 非流式推荐（Swagger / API 客户端） |
+| GET | `/api/v1/users` | 演示用户列表 |
+| GET | `/api/v1/users/{user_id}/profile` | 用户画像 + RFM |
+| GET | `/api/v1/experiments?user_id=` | A/B 实验状态 |
+| POST | `/api/v1/experiments/outcome` | 记录实验转化（更新 Thompson 后验） |
 
-请求示例：
+### SSE 事件
 
-```bash
-curl -X POST http://localhost:8000/api/v1/recommend \
-  -H "Content-Type: application/json" \
-  -d '{"user_id": "user_001", "scene": "homepage", "num_items": 5}'
-```
+| 事件 | 载荷 | 前端表现 |
+|------|------|----------|
+| `session` | `thread_id` | 保存会话，后续追问复用 |
+| `agent` | `agent`, `status`, `message` | 左栏状态灯 / 聊天内的 Agent 状态 |
+| `plan` | `intent`, `reply`, `agents`, … | Supervisor 气泡 + 本轮调度计划 |
+| `experiment` | `variant`, `variants[]`, `winner` | 右栏 A/B 面板 |
+| `profile` | 用户画像对象 | 右栏画像 + RFM 面板 |
+| `products` | 商品列表 | 商品卡片（自动打徽章） |
+| `marketing` | 文案条目 + 客群 | Copywriting Agent 气泡 |
+| `inventory` | 库存条目 + 摘要 | Inventory Agent 气泡 + 库存徽章 |
+| `token` | `content` | 逐字流式回复 |
+| `done` | `latency_ms`, `timings` | 响应耗时卡片 |
+| `error` | `message` | 错误气泡 |
 
-聊天式推荐为 SSE 流式响应，事件顺序为 `products → token(×N) → done`：
+## 配置
 
-```bash
-curl -N -X POST http://localhost:8000/api/v1/chat \
-  -H "Content-Type: application/json" \
-  -d '{"user_id":"U001","messages":[{"role":"user","content":"推荐一款口红"}]}'
-```
+`.env`（前缀 `ECOM_`）：
 
-## 数据说明
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `ECOM_LLM_API_KEY` | — | 必填 |
+| `ECOM_LLM_BASE_URL` | `https://api.openai.com/v1` | 任意 OpenAI 兼容地址 |
+| `ECOM_LLM_MODEL` | `gpt-4o-mini` | 模型名 |
+| `ECOM_LLM_DISABLE_THINKING` | `false` | DeepSeek thinking 模型建议开启 |
+| `ECOM_MAX_PRODUCTS` | `3` | 聚合后展示的商品数 |
+| `ECOM_MAX_CANDIDATES` | `12` | 召回候选上限 |
 
-系统默认使用内置数据即可完整运行：商品库为 `agents/product_rec_agent.py` 中的 `MOCK_PRODUCTS` 列表（覆盖数码、美妆、服饰、食品等类目，每个商品自带 `stock` 库存字段），用户行为数据可通过请求的 `context` 字段传入。
-
-如需接入真实数据（均已在配置中预留）：
-
-- **Redis 特征服务**：`services/feature_store.py` 实现了基于 Sorted Set 的行为序列存储与 RFM 计算，可注入 `UserProfileAgent.feature_store`；
-- **数据库/向量检索**：`config/settings.py` 已预留 `database_url`、`milvus_*` 配置项。
-
-### 修改商品库
-
-直接编辑 `MOCK_PRODUCTS` 列表即可，`stock` 设为 0 的商品会被库存 Agent 自动过滤：
-
-```python
-Product(
-    product_id="P001",       # 唯一标识
-    name="iPhone 16 Pro",    # 商品名
-    category="手机",          # 类目（参与召回过滤与画像匹配）
-    price=7999,              # 价格
-    brand="Apple",           # 品牌
-    seller_id="S01",         # 卖家 ID
-    stock=500,               # 库存
-    tags=["旗舰", "新品"],    # 标签（供 LLM 精排参考）
-)
-```
+可选接入 LangSmith 追踪：设置 `LANGSMITH_TRACING=true` 与 `LANGSMITH_API_KEY`。
 
 ## 项目结构
 
 ```text
 .
-├── python/                        # 后端（FastAPI）
-│   ├── main.py                    # 入口，定义所有路由
-│   ├── agents/                    # 五个 Agent
-│   │   ├── base_agent.py          # 基类（超时、重试、降级）
-│   │   ├── chat_agent.py          # 聊天意图解析（前置门面）
-│   │   ├── user_profile_agent.py  # 用户画像
-│   │   ├── product_rec_agent.py   # 商品推荐（含内置商品库）
-│   │   ├── inventory_agent.py     # 库存决策
-│   │   └── marketing_copy_agent.py# 营销文案
-│   ├── orchestrator/
-│   │   ├── supervisor.py          # Supervisor 并行编排
-│   │   └── graph.py               # LangGraph 状态图实现
-│   ├── services/
-│   │   ├── ab_test.py             # A/B 测试引擎
-│   │   ├── feature_store.py       # Redis 实时特征服务
-│   │   └── metrics.py             # 监控指标收集
-│   ├── models/schemas.py          # 数据模型
-│   ├── config/settings.py         # 配置管理
-│   └── tests/                     # 单元测试
-├── frontend/                      # 前端（React + Vite）
+├── python/
+│   ├── main.py                     # FastAPI 入口 + SSE 适配器
+│   ├── orchestrator/graph.py       # LangGraph 状态图（核心编排）
+│   ├── agents/
+│   │   ├── supervisor_agent.py     # LLM 计划与路由
+│   │   ├── user_profile_agent.py   # RFM 画像
+│   │   ├── product_rec_agent.py    # 召回 + LLM 重排
+│   │   ├── inventory_agent.py      # 库存决策
+│   │   ├── marketing_copy_agent.py # 分群文案
+│   │   ├── chat_agent.py           # 工具调用助手
+│   │   ├── structured.py           # 跨服务商结构化输出
+│   │   ├── models.py               # ChatOpenAI 工厂
+│   │   └── base_agent.py           # 超时 / 重试 / 降级基类
+│   ├── data/                       # 演示商品目录与用户
+│   ├── services/ab_test.py         # A/B + Thompson Sampling
+│   ├── models/schemas.py           # Pydantic 模型
+│   ├── config/settings.py          # 环境配置
+│   └── tests/                      # 15 个测试（桩 LLM）
+├── frontend/
 │   └── src/
-│       ├── hooks/useChat.js       # SSE 连接与消息状态
-│       └── components/            # 聊天窗口、商品卡片等组件
-├── docs/architecture.md           # 架构设计文档
-└── docker-compose.yml             # 一键部署（含 Redis/Milvus/MySQL）
+│       ├── hooks/useAgentStream.ts # SSE 连接与全局状态
+│       ├── components/             # 三栏布局的所有组件
+│       ├── api.ts, types.ts
+│       └── index.css               # Tailwind 主题
+├── docs/architecture.md            # 架构与协议详解
+└── docker-compose.yml
 ```
+
+## 演示数据
+
+- `data/users.py`：4 位演示用户（VIP Champions / New / Loyal / At Risk），前端可切换，画像与推荐随之变化
+- `data/products.py`：32 件商品（14 个类目，USD 价格含评分与库存），美妆/服饰/数码/食品等
+- A/B 面板预置 499 / 498 次实验样本（A 62.7% vs B 74.3%），可直接观察 Thompson Sampling 的获胜方
+
+## 设计说明
+
+- **结构化输出**：部分服务商（如 DeepSeek thinking 模型）不支持强制 `tool_choice` 或不支持 `json_schema` 响应格式，因此 `JsonStructured` 采用 JSON 模式 + 在 prompt 中注入 JSON Schema 的方式，兼容性最好
+- **前端流式**：未使用第三方聊天 SDK，而是自定义强类型 SSE Hook——事件包含 Agent 状态、画像、A/B 等业务数据，直连自定义协议比适配通用 SDK 更简单可靠
+- **降级优先**：任何 LLM 环节失败都不会中断整轮对话，重排失败按召回顺序返回，文案失败则跳过该气泡

@@ -1,151 +1,177 @@
-# 系统架构设计文档
+# 架构设计文档
 
-## 1. 系统总览
+本文档描述 v2 架构：LangGraph 动态调度 + 并行 Agent 流水线 + SSE 实时流。
 
-本系统采用 **Supervisor + 4 Agent 并行聚合** 架构,实现电商场景下的个性化推荐全链路。
-
-```
-用户请求
-    │
-    ▼
-┌──────────────────────────────────────────────────────┐
-│                  Supervisor 协调Agent                  │
-│                                                       │
-│  Phase 1 (并行):                                      │
-│  ┌─────────────────┐  ┌─────────────────┐            │
-│  │ 用户画像Agent    │  │ 商品召回Agent    │            │
-│  │ Redis特征查询    │  │ 多路召回+去重    │            │
-│  └────────┬────────┘  └────────┬────────┘            │
-│           │                    │                      │
-│  Phase 2 (并行):               ▼                      │
-│  ┌─────────────────┐  ┌─────────────────┐            │
-│  │ LLM重排Agent    │  │ 库存决策Agent    │            │
-│  │ 画像x商品交叉   │  │ 库存校验+限购   │            │
-│  └────────┬────────┘  └────────┬────────┘            │
-│           │                    │                      │
-│           └──────────┬─────────┘                      │
-│                      ▼                                │
-│  Phase 3 (串行):                                      │
-│  ┌─────────────────────────────────┐                  │
-│  │ 结果聚合: 库存过滤 + 排序合并    │                  │
-│  └────────────────┬────────────────┘                  │
-│                   ▼                                   │
-│  ┌─────────────────────────────────┐                  │
-│  │ 营销文案Agent: 个性化文案生成    │                  │
-│  └────────────────┬────────────────┘                  │
-│                   ▼                                   │
-│  ┌─────────────────────────────────┐                  │
-│  │ A/B测试引擎: 实验分组 + 指标     │                  │
-│  └────────────────┬────────────────┘                  │
-└───────────────────┼──────────────────────────────────┘
-                    ▼
-              个性化响应
-```
-
-## 2. Agent职责矩阵
-
-| Agent | 核心职责 | 输入 | 输出 | 数据源 | 超时 |
-|-------|---------|------|------|--------|------|
-| 用户画像 | 行为分析+RFM+分群 | user_id, context | UserProfile | 请求 context（可接入 Redis Feature Store） | 5s |
-| 商品推荐 | 过滤召回+LLM精排 | UserProfile, keyword | Product[] | 内置商品库, LLM | 8s |
-| 营销文案 | 模板选择+LLM生成+合规 | UserProfile, Product[] | Copy[] | LLM | 10s |
-| 库存决策 | 库存校验+预警+限购 | Product[] | available_ids, alerts | Product.stock | 5s |
-
-## 3. 数据流
+## 1. 运行时拓扑
 
 ```
-请求 context / Redis (可选)     内置商品库              Product.stock
-       │                            │                       │
-       ▼                            ▼                       ▼
-  用户画像Agent              商品推荐Agent              库存决策Agent
-       │                            │                       │
-       └──────────┬─────────────────┘                       │
-                  ▼                                         │
-            结果聚合器 ◄────────────────────────────────────┘
-                  │
-                  ▼
-            营销文案Agent → LLM
-                  │
-                  ▼
-            A/B测试引擎
-                  │
-                  ▼
-             API Response
+浏览器 (React 19)
+  │  POST /api/v1/chat (SSE)
+  ▼
+FastAPI (python/main.py)
+  │  graph.astream(stream_mode=["custom", "updates"])
+  ▼
+LangGraph 状态图 (python/orchestrator/graph.py)
+  ├── SupervisorAgent   LLM 结构化输出 → 执行计划
+  ├── UserProfileAgent  确定性 RFM 计算
+  ├── ProductRecAgent   目录召回 + LLM 重排
+  ├── InventoryAgent    库存规则
+  ├── MarketingCopyAgent LLM 结构化文案
+  └── ChatAgent         create_agent 工具调用
+      │
+      ▼
+OpenAI 兼容 LLM API（DeepSeek / OpenAI / …）
 ```
 
-## 4. 并行策略分析
-
-### 延迟对比
+## 2. 图结构
 
 ```
-串行模式: 5s + 8s + 5s + 10s = 28s (不可接受)
-
-并行模式:
-  Phase 1: max(5s, 8s) = 8s    (画像 || 召回)
-  Phase 2: max(8s, 5s) = 8s    (重排 || 库存)
-  Phase 3: 10s                   (文案, 依赖前两步)
-  合计: ≈ 8s + 8s + 10s = 26s  (仍然太慢, 因为LLM每次不需要这么久)
-  
-  实际: LLM平均响应~1-2s
-  实际总延迟: ≈ 2s + 2s + 2s = 6s (P99 < 8s)
+START → supervisor
+          ├─ general        → assistant → END
+          └─ product_search → [profile?, recall]
+                                     ↓        ↓
+                                  rerank    inventory
+                                     ↓        ↓
+                                 aggregate
+                                     ├─ copy? → marketing
+                                     └────────→ respond → END
 ```
 
-### 依赖关系
+关键设计：
 
-- Phase 1: 画像和召回互不依赖 → 并行
-- Phase 2: 重排需要画像(Phase 1) 但不需要库存 → 重排和库存并行
-- Phase 3: 文案需要最终商品列表(Phase 2) → 串行
+- **条件扇出**：`route_supervisor` 返回目标节点列表（LangGraph 支持列表形式的扇出），`profile` 只在计划包含时执行，未触发的分支不会阻塞下游汇合（已用测试验证）
+- **隐式汇合**：`rerank` / `inventory` 都有来自 `profile` 与 `recall` 的入边，LangGraph 保证汇合节点每个超步只执行一次，不会重复调用 LLM
+- **条件跳过**：`aggregate` 之后按计划决定是否进入 `marketing`，快速事实类问题可以省掉一次 LLM 文案调用
 
-## 5. 稳定性设计
+## 3. 图状态（GraphState）
 
-### 5.1 重试策略
-- 指数退避: 0.5s 起步, 上限 4s
-- 最大重试: 2次(避免雪崩)
-- 幂等性: 所有Agent操作都是幂等的
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `messages` | `Annotated[list[AnyMessage], add_messages]` | 对话历史，随 Checkpointer 持久化 |
+| `user_id` / `query` | `str` | 当前请求上下文 |
+| `plan` | `dict` | SupervisorPlan 序列化结果 |
+| `profile` | `UserProfile \| None` | 画像节点输出 |
+| `candidates` | `list[Product]` | 召回候选 |
+| `ranked` | `list[Product]` | LLM 重排结果 |
+| `inventory` / `available_ids` | 列表 | 库存节点输出 |
+| `copies` | `list[CopyItem]` | 文案节点输出 |
+| `final_products` | `list[Product]` | 聚合后的展示商品 |
+| `reply` | `str` | 本轮回复文本 |
+| `timings` | `Annotated[dict, merge_dicts]` | 各节点耗时，使用自定义 reducer 合并并行写入 |
 
-### 5.2 降级策略
-| Agent | 降级方案 |
-|-------|---------|
-| 用户画像 | 返回失败结果, Supervisor 以无画像模式继续推荐 |
-| 商品推荐 | 回退到召回候选列表, 跳过LLM精排 |
-| 营销文案 | 返回空文案列表, 不影响商品推荐结果 |
-| 库存决策 | 跳过库存过滤, 直接使用排序结果 |
+`supervisor_node` 每轮会重置所有瞬态字段（profile / candidates / …），避免上一轮的残留数据污染本轮。
 
-## 6. A/B测试架构
+## 4. 节点职责与事件
+
+| 节点 | LLM | 发出事件 | 失败降级 |
+|------|-----|----------|----------|
+| `supervisor` | 结构化计划 | `agent`(×2), `plan`, `experiment` | 计划回退为 general + 请用户重述 |
+| `assistant` | 工具调用流式 | `agent`(×2), `token` | 节点内捕获异常，输出错误提示 |
+| `profile` | 确定性 | `agent`(×2), `profile` | 无画像继续（重排按通用规则） |
+| `recall` | 确定性 | `agent`(running) | 关键词无命中时回退到全目录按评分排序 |
+| `rerank` | 结构化排序 | `agent`(done) | 返回空 ranked，聚合使用召回顺序 |
+| `inventory` | 确定性 | — | 输出超时则跳过库存过滤 |
+| `aggregate` | — | `products` | 过滤后为空时回退到完整排名 |
+| `marketing` | 结构化文案 | `agent`(×2), `marketing` | 返回空列表，跳过文案气泡 |
+| `respond` | 流式总结 | `agent`(×2), `inventory`, `token` | token 失败输出兜底文本 |
+
+`respond` 在流式输出前补发 `inventory` 事件（只含最终商品），保证前端聊天内的消息顺序为：商品 → 文案 → 库存 → 总结。
+
+## 5. 动态调度规则
+
+`SupervisorAgent` 用 `JsonStructured` 让 LLM 输出 `SupervisorPlan`：
+
+```json
+{
+  "intent": "product_search | general",
+  "reply": "一句即时确认，如 Got it! Here are the best running shoes for you.",
+  "search": { "keywords": [], "category": "", "brand": "", "min_price": null, "max_price": 120 },
+  "agents": ["profile", "recall", "rerank", "inventory", "copy"]
+}
+```
+
+- `route_supervisor`：`intent=general` → `assistant`；否则扇出 `recall`（必需）+ `profile`（计划包含时）
+- `route_aggregate`：`agents` 含 `copy` 才进入 `marketing`
+- 计划提示词要求：产品检索必须含 `recall/rerank/inventory`；大多数情况加 `profile`；需要营销文案才加 `copy`；闲聊为空列表
+
+## 6. 流式协议
+
+FastAPI 将 LangGraph 的两种流映射为 SSE：
+
+```python
+async for mode, chunk in graph.astream(inputs, config=config, stream_mode=["custom", "updates"]):
+    if mode == "custom":   yield _sse(chunk["type"], chunk)     # 业务事件
+    else:                  merge timings from chunk              # 状态增量
+yield _sse("done", {"latency_ms": ..., "timings": {...}})
+```
+
+- 节点通过 `get_stream_writer()` 发出 custom 事件（`emit()` 封装，非流式 `ainvoke` 下自动静默）
+- token 由 `assistant` / `respond` 两个节点显式转发，因此监督者/重排等结构化调用的中间 token 不会泄漏到前端
+
+前端 `useAgentStream` 的顺序处理：
 
 ```
-用户请求
-    │
-    ▼
-┌─────────────────────────────┐
-│  流量分桶 (MD5 hash % 100)  │
-├─────────────────────────────┤
-│ bucket 0-49  │ bucket 50-99 │
-│   control    │  treatment   │
-├──────────────┼──────────────┤
-│ 规则重排      │ LLM重排      │
-│ 通用文案      │ 个性化文案    │
-└──────────────┴──────────────┘
-        │               │
-        ▼               ▼
-   指标收集(CTR/CVR/GMV)
-        │
-        ▼
-  Thompson Sampling
-  动态调整流量比例
+session → (agent 状态更新 | plan → Supervisor 气泡) → profile(右栏)
+        → products(卡片) → marketing(气泡) → inventory(气泡)
+        → token(逐字追加到 Assistant 气泡) → done(耗时)
 ```
 
-## 7. 扩展设计
+## 7. 稳定性设计
 
-### 可扩展点
-1. **新Agent**: 只需实现BaseAgent接口,注册到Supervisor
-2. **新实验**: ABTestEngine.register_experiment()
-3. **新召回策略**: 在ProductRecAgent._recall()中添加
-4. **新文案模板**: 在PROMPT_TEMPLATES字典中添加
+| 机制 | 实现 | 参数 |
+|------|------|------|
+| 超时熔断 | `BaseAgent` 中 `asyncio.wait_for` 包裹 `_execute` | 默认 8s，LLM 节点 25s，对话 45s |
+| 指数退避重试 | `tenacity`（0.5s 起步，上限 4s） | 2 次尝试 |
+| 降级 | 每个 Agent 覆写 `_fallback()` | 见第 4 节表格 |
+| 请求级兜底 | `/api/v1/chat` 捕获异常发 `error` 事件 | 保证 SSE 正常结束 |
 
-### 生产化路线
-1. Redis Cluster → 支持百万级用户特征
-2. Milvus分布式 → 支持亿级商品向量
-3. Kubernetes → Agent独立Pod,自动扩缩容
-4. Kafka → 行为事件异步处理
-5. Prometheus + Grafana → 实时监控面板
+## 8. 会话记忆
+
+- `build_graph()` 默认挂载 `InMemorySaver`（可注入其他 Checkpointer）
+- 会话由请求里的 `thread_id` 标识；前端首次请求拿到 `session` 事件后复用，点击「New chat」即丢弃
+- 多轮上下文（如「cheaper ones」）由 Supervisor 读取 `messages` 历史解析
+
+## 9. A/B 测试
+
+- **分桶**：`md5(user_id + experiment_id) % n_variants`，同一用户永远在同一实验组（`ABTestEngine.assign`）
+- **动态调权**：`sample()` 从各组 Beta 后验采样取最大（Thompson Sampling）
+- **记录结果**：`POST /api/v1/experiments/outcome` 更新后验
+- 演示数据预置 A(313/186)、B(370/128)，显示转化率 62.7% / 74.3%
+
+## 10. RFM 与客群规则
+
+```
+recency   = max(0, 1 - 距上次购买天数 / 90)
+frequency = min(1, 购买次数 / 12)
+monetary  = min(1, 累计消费 / 1500)
+overall   = 0.3·recency + 0.3·frequency + 0.4·monetary
+```
+
+客群判定（自上而下命中即返回）：
+
+1. `orders ≤ 2` → **New**
+2. `recency_days > 60` → **At Risk**
+3. `orders ≥ 10 且 消费 ≥ 1000 且 recency ≤ 14` → **Champions**
+4. `orders ≥ 5 且 recency ≤ 45` → **Loyal**
+5. 其余 → **Potential**
+
+## 11. 前端数据流
+
+```
+useAgentStream(userId)
+  ├── feed          → ChatPanel（user / agent / products / inventory 四种块）
+  ├── agentStates   → AgentPanel（idle / running / done 状态灯）
+  ├── profile       → ProfilePanel 画像 + RFM 聚类
+  ├── experiment    → ProfilePanel A/B 面板
+  └── latencyMs/timings → ProfilePanel 响应耗时卡片
+```
+
+用户切换时重新拉取画像与实验数据并重置会话；所有流式写入都在单个 `send()` 的事件回调中完成。
+
+## 12. 扩展点
+
+- **新增 Agent**：实现 `BaseAgent` 子类 → 在图中注册节点与边 → 把名字加入计划提示词的 `agents` 枚举
+- **新增工具**：在 `chat_agent.py` 用 `@tool` 装饰函数并加入 `create_agent` 的 tools 列表
+- **持久化记忆**：把 `build_graph()` 的 checkpointer 换成 `SqliteSaver` / Postgres 实现
+- **真实数据**：替换 `data/products.py` 与 `data/users.py`，或在画像节点接入数据库/特征服务
+- **可观测性**：设置 `LANGSMITH_TRACING=true` 即获得全链路追踪

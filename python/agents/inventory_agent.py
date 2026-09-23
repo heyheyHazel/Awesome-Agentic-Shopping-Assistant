@@ -1,84 +1,44 @@
-"""库存决策 Agent：过滤缺货商品，输出库存预警与限购策略。"""
+"""Inventory agent: availability check, low-stock alerts, and purchase limits."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from models.schemas import InventoryResult, Product
+from config import get_settings
+from models.schemas import InventoryItem, InventoryResult, Product
 
 from .base_agent import BaseAgent
 
-SAFETY_STOCK_THRESHOLD = 50
-LOW_STOCK_THRESHOLD = 100
-HOT_ITEM_PURCHASE_LIMIT = 2
+LOW_STOCK_THRESHOLD = 10
+LOW_STOCK_LIMIT = 2
+CRITICAL_STOCK_LIMIT = 1
 
 
 class InventoryAgent(BaseAgent):
+    """Turns a product shortlist into an inventory report for the UI."""
+
     def __init__(self):
-        from config import get_settings
+        super().__init__(name="inventory", timeout=get_settings().agent_timeout_default)
 
-        settings = get_settings()
-        super().__init__(
-            name="inventory",
-            timeout=settings.agent_timeout_inventory,
-        )
-
-    async def _execute(self, **kwargs: Any) -> InventoryResult:
-        products: list[Product] = kwargs.get("products", [])
-
-        available = []
-        low_stock_alerts = []
-        purchase_limits: dict[str, int] = {}
-
-        for product in products:
-            stock = product.stock
-
-            if stock <= 0:
+    async def _execute(self, products: list[Product] | None = None, **_: Any) -> InventoryResult:
+        """Classify each product by stock level and derive purchase limits."""
+        items: list[InventoryItem] = []
+        for product in products or []:
+            if product.stock <= 0:
+                items.append(InventoryItem(
+                    product_id=product.product_id, name=product.name,
+                    stock=0, status="out_of_stock",
+                ))
                 continue
 
-            available.append(product.product_id)
+            if product.stock <= LOW_STOCK_THRESHOLD:
+                status, limit = "low_stock", CRITICAL_STOCK_LIMIT
+            else:
+                status, limit = "in_stock", None
+            items.append(InventoryItem(
+                product_id=product.product_id, name=product.name,
+                stock=product.stock, status=status, purchase_limit=limit,
+            ))
 
-            if stock <= SAFETY_STOCK_THRESHOLD:
-                low_stock_alerts.append({
-                    "product_id": product.product_id,
-                    "name": product.name,
-                    "current_stock": stock,
-                    "level": "critical",
-                    "action": "urgent_restock",
-                })
-            elif stock <= LOW_STOCK_THRESHOLD:
-                low_stock_alerts.append({
-                    "product_id": product.product_id,
-                    "name": product.name,
-                    "current_stock": stock,
-                    "level": "warning",
-                    "action": "plan_restock",
-                })
-
-            limit = self._calc_purchase_limit(product, stock)
-            if limit is not None:
-                purchase_limits[product.product_id] = limit
-
-        return InventoryResult(
-            success=True,
-            available_products=available,
-            low_stock_alerts=low_stock_alerts,
-            purchase_limits=purchase_limits,
-            data={
-                "total_checked": len(products),
-                "available_count": len(available),
-                "alert_count": len(low_stock_alerts),
-            },
-            confidence=0.95,
-        )
-
-    def _calc_purchase_limit(self, product: Product, stock: int) -> int | None:
-        """Dynamic purchase limit based on stock depth and product heat."""
-        is_hot = "新品" in product.tags or "旗舰" in product.tags
-        if stock <= SAFETY_STOCK_THRESHOLD:
-            return 1
-        if stock <= LOW_STOCK_THRESHOLD and is_hot:
-            return HOT_ITEM_PURCHASE_LIMIT
-        if is_hot and stock <= 300:
-            return 3
-        return None
+        available = [item.product_id for item in items if item.status != "out_of_stock"]
+        return InventoryResult(items=items, available_ids=available)

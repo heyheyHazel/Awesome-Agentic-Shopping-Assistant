@@ -1,67 +1,55 @@
-"""
-Multi-Agent E-Commerce Recommendation System — FastAPI Entry Point
-
-Endpoints:
-  POST /api/v1/recommend          - 获取个性化推荐
-  POST /api/v1/recommend/graph    - 通过LangGraph pipeline推荐
-  POST /api/v1/chat               - 聊天式推荐 (SSE streaming)
-  GET  /api/v1/experiments        - 查看A/B实验状态
-  GET  /api/v1/metrics            - 查看系统监控指标
-  GET  /health                    - 健康检查
-"""
+"""FastAPI entry point: SSE chat streaming plus profile and experiment APIs."""
 
 from __future__ import annotations
 
-import json as json_module
-import sys
-import os
-
-sys.path.insert(0, os.path.dirname(__file__))
-
+import json
+import time
+import uuid
 from contextlib import asynccontextmanager
+from typing import Any
 
 import structlog
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage
 
+from agents import UserProfileAgent
+from agents.user_profile_agent import SEGMENTS
 from config import get_settings
-from models.schemas import ChatRequest, RecommendationRequest, RecommendationResponse
-from agents import ChatAgent
-from orchestrator.supervisor import SupervisorOrchestrator
-from orchestrator.graph import build_recommendation_graph
-from services.ab_test import ABTestEngine
-from services.metrics import MetricsCollector
+from data.users import USERS
+from models.schemas import (
+    ChatRequest,
+    ExperimentInfo,
+    ProfileResponse,
+    RecommendRequest,
+    RecommendationResponse,
+    UserSummary,
+)
+from orchestrator.graph import ab_engine, build_graph
 
 logger = structlog.get_logger()
 settings = get_settings()
 
-
-ab_engine = ABTestEngine()
-metrics_collector = MetricsCollector()
-supervisor = SupervisorOrchestrator(ab_engine=ab_engine)
-chat_agent = ChatAgent(supervisor=supervisor)
-rec_graph = None
+graph: Any = None
+profile_agent = UserProfileAgent()
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    global rec_graph
-    rec_graph = build_recommendation_graph()
+async def lifespan(_: FastAPI):
+    global graph
+    graph = build_graph()
     logger.info("app.startup", model=settings.llm_model)
     yield
-    logger.info("app.shutdown")
 
 
 app = FastAPI(
-    title="Multi-Agent E-Commerce Recommendation System",
-    description="用户画像Agent + 商品推荐Agent + 营销文案Agent + 库存决策Agent，并行+聚合模式",
-    version="1.0.0",
+    title="Multi-Agent E-Commerce Assistant",
+    description="Supervisor routing plus profile, recall, rerank, inventory and copy agents.",
+    version="2.0.0",
     lifespan=lifespan,
 )
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -70,101 +58,84 @@ app.add_middleware(
 )
 
 
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
 @app.get("/health")
-async def health():
+async def health() -> dict:
     return {"status": "healthy", "model": settings.llm_model}
 
 
-@app.post("/api/v1/recommend", response_model=RecommendationResponse)
-async def recommend(request: RecommendationRequest):
-    """使用Supervisor编排器进行推荐 (生产推荐用法)"""
-    response = await supervisor.recommend(request)
-    _collect_metrics(response)
-    return response
+@app.get("/api/v1/users", response_model=list[UserSummary])
+async def list_users() -> list[UserSummary]:
+    """Demo shoppers available in the UI."""
+    return [
+        UserSummary(user_id=u.user_id, name=u.name, email=u.email, tier=u.tier)
+        for u in USERS.values()
+    ]
 
 
-@app.post("/api/v1/recommend/graph")
-async def recommend_via_graph(request: RecommendationRequest):
-    """使用LangGraph状态图进行推荐 (展示LangGraph能力)"""
-    if not rec_graph:
-        return {"error": "Graph not initialized"}
-    state = {
-        "user_id": request.user_id,
-        "scene": request.scene,
-        "num_items": request.num_items,
-        "context": request.context,
-    }
-    result = await rec_graph.ainvoke(state)
-    return {
-        "request_id": result.get("request_id"),
-        "user_id": result.get("user_id"),
-        "products": [p.model_dump() for p in result.get("final_products", [])],
-        "marketing_copies": result.get("marketing_copies", []),
-        "experiment_group": result.get("experiment_group", "control"),
-        "total_latency_ms": round(result.get("total_latency_ms", 0), 1),
-    }
+@app.get("/api/v1/users/{user_id}/profile", response_model=ProfileResponse)
+async def get_profile(user_id: str) -> ProfileResponse:
+    """RFM profile rendered in the dashboard side panel."""
+    result = await profile_agent.run(user_id=user_id)
+    if not result.profile:
+        raise HTTPException(status_code=404, detail="Unknown user")
+    return ProfileResponse(profile=result.profile, segments=SEGMENTS)
+
+
+@app.get("/api/v1/experiments", response_model=ExperimentInfo)
+async def get_experiment(user_id: str | None = None) -> ExperimentInfo:
+    """Current A/B state, including the variant of a given user."""
+    return ab_engine.info(user_id)
+
+
+@app.post("/api/v1/experiments/outcome")
+async def record_outcome(variant: str, success: bool) -> dict:
+    """Feed a conversion event into the Thompson Sampling posterior."""
+    ab_engine.record_outcome(variant, success)
+    return {"status": "recorded"}
 
 
 @app.post("/api/v1/chat")
-async def chat(request: ChatRequest):
-    """聊天式推荐 — runs ChatAgent for intent + products, then streams reply via SSE.
+async def chat(request: ChatRequest) -> StreamingResponse:
+    """Chat endpoint streaming SSE events.
 
-    SSE event flow: products → token (×N) → done
+    Event order: session → agent/plan/profile/products/marketing/inventory → token → done.
     """
-    result = await chat_agent.run(
-        user_id=request.user_id,
-        messages=[m.model_dump() for m in request.messages],
-    )
+    thread_id = request.thread_id or str(uuid.uuid4())
 
-    intake_products = getattr(result, "products", []) or []
-    reply_prompt = getattr(result, "reply_prompt", "") or ""
-
-    async def _event_stream():
-        # ── Phase 1: emit products immediately ──
-        products_payload = {
-            "products": [
-                {
-                    "product_id": p.product_id,
-                    "name": p.name,
-                    "price": p.price,
-                    "category": p.category,
-                    "brand": p.brand,
-                    "description": p.description,
-                    "image_url": p.image_url,
-                }
-                for p in intake_products[:6]
-            ]
-        }
-        yield _sse_event("products", products_payload)
-
-        # ── Phase 2: stream reply ──
-        if result.success:
-            # Agent succeeded — stream LLM tokens for a natural reply
-            try:
-                stream_llm = ChatOpenAI(
-                    api_key=settings.llm_api_key,
-                    base_url=settings.llm_base_url,
-                    model=settings.llm_model,
-                    temperature=0.7,
-                    max_tokens=1024,  # type: ignore[reportCallIssue]
-                    streaming=True,
-                )
-                async for chunk in stream_llm.astream(reply_prompt):
-                    token = chunk.content if hasattr(chunk, "content") else str(chunk)
-                    if token:
-                        yield _sse_event("token", {"content": token})
-            except Exception as exc:
-                logger.error("chat.stream_error", error=str(exc))
-                yield _sse_event("token", {"content": "\n\n抱歉，回复生成过程中出现问题，请重试。"})
-        else:
-            # Agent failed — emit fallback text directly (skip another API call)
-            yield _sse_event("token", {"content": reply_prompt})
-
-        # ── Phase 3: done ──
-        yield _sse_event("done", {})
+    async def stream():
+        yield _sse("session", {"thread_id": thread_id})
+        start = time.perf_counter()
+        timings: dict[str, float] = {}
+        try:
+            config = {"configurable": {"thread_id": thread_id}}
+            inputs = {
+                "messages": [HumanMessage(content=request.message)],
+                "query": request.message,
+                "user_id": request.user_id,
+            }
+            async for mode, chunk in graph.astream(
+                inputs, config=config, stream_mode=["custom", "updates"]
+            ):
+                if mode == "custom":
+                    yield _sse(chunk.get("type", "message"), chunk)
+                elif isinstance(chunk, dict):
+                    for delta in chunk.values():
+                        if isinstance(delta, dict) and isinstance(delta.get("timings"), dict):
+                            timings.update(delta["timings"])
+            yield _sse(
+                "done",
+                {"latency_ms": round((time.perf_counter() - start) * 1000, 1), "timings": timings},
+            )
+        except Exception as exc:
+            logger.error("chat.failed", error=str(exc))
+            yield _sse("error", {"message": "Something went wrong. Please try again."})
 
     return StreamingResponse(
-        _event_stream(),
+        stream(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -174,57 +145,28 @@ async def chat(request: ChatRequest):
     )
 
 
-def _sse_event(event: str, data: dict) -> str:
-    """Format a single SSE event with JSON data payload."""
-    return f"event: {event}\ndata: {json_module.dumps(data, ensure_ascii=False)}\n\n"
-
-
-@app.get("/api/v1/experiments")
-async def get_experiments():
-    """查看所有A/B实验状态"""
-    experiments = {}
-    for exp_id, exp in ab_engine.experiments.items():
-        experiments[exp_id] = {
-            "name": exp.name,
-            "enabled": exp.enabled,
-            "groups": [
-                {
-                    "name": g.name,
-                    "weight": g.weight,
-                    "config": g.config,
-                    "successes": g.successes,
-                    "failures": g.failures,
-                }
-                for g in exp.groups
-            ],
-            "stats": ab_engine.get_stats(exp_id),
-        }
-    return experiments
-
-
-@app.get("/api/v1/metrics")
-async def get_metrics():
-    """查看系统监控指标"""
-    return {
-        "agents": metrics_collector.get_agent_stats(),
-        "business": metrics_collector.get_business_stats(),
-    }
-
-
-@app.post("/api/v1/experiments/{experiment_id}/outcome")
-async def record_outcome(experiment_id: str, group: str, success: bool):
-    """记录A/B测试结果,更新Thompson Sampling"""
-    ab_engine.record_outcome(experiment_id, group, success)
-    return {"status": "recorded"}
-
-
-def _collect_metrics(response: RecommendationResponse):
-    for name, result in response.agent_results.items():
-        metrics_collector.record_agent_call(
-            agent_name=name,
-            success=result.success,
-            latency_ms=result.latency_ms,
-        )
+@app.post("/api/v1/recommend", response_model=RecommendationResponse)
+async def recommend(request: RecommendRequest) -> RecommendationResponse:
+    """Non-streaming variant of /chat, handy for API clients and Swagger."""
+    start = time.perf_counter()
+    result = await graph.ainvoke(
+        {
+            "messages": [HumanMessage(content=request.query)],
+            "query": request.query,
+            "user_id": request.user_id,
+        },
+        config={"configurable": {"thread_id": f"recommend-{uuid.uuid4()}"}},
+    )
+    final_ids = {p.product_id for p in result.get("final_products", [])}
+    return RecommendationResponse(
+        user_id=request.user_id,
+        reply=result.get("reply", ""),
+        products=result.get("final_products", []),
+        copies=result.get("copies", []),
+        inventory=[i for i in result.get("inventory", []) if i.product_id in final_ids],
+        experiment=ab_engine.info(request.user_id),
+        latency_ms=round((time.perf_counter() - start) * 1000, 1),
+    )
 
 
 if __name__ == "__main__":

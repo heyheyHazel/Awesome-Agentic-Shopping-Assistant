@@ -33,3 +33,7 @@ docker-compose.override.yml
 
 # Local agent logs
 .claude/
+.agent/
+
+# Local design reference (do not publish)
+image.png

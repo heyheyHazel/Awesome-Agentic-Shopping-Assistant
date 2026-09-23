@@ -1,0 +1,43 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/inter';
+
+@theme {
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, sans-serif;
+
+  --color-canvas: #f5f6f9;
+  --color-card: #ffffff;
+  --color-line: #e8eaf0;
+  --color-ink: #171a21;
+  --color-muted: #667085;
+  --color-faint: #98a2b3;
+
+  --color-brand: #4b7de1;
+  --color-brand-soft: #edf3fe;
+  --color-success: #3f9d6b;
+  --color-success-soft: #eaf7f0;
+  --color-warning: #e17d32;
+  --color-warning-soft: #fdf1e6;
+  --color-vip: #7d4be1;
+  --color-vip-soft: #f3edfd;
+  --color-danger: #d35454;
+}
+
+body {
+  @apply bg-canvas text-ink antialiased;
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-line bg-card shadow-[0_1px_2px_rgba(16,24,40,0.04),0_4px_16px_rgba(16,24,40,0.04)];
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full border border-line bg-card px-2.5 py-1 text-xs font-medium text-muted;
+  }
+  .section-label {
+    @apply text-[11px] font-semibold uppercase tracking-[0.14em] text-faint;
+  }
+  .scroll-slim {
+    scrollbar-width: thin;
+    scrollbar-color: #d3d8e2 transparent;
+  }
+}
