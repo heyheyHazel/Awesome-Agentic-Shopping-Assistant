@@ -1,4 +1,4 @@
-# Frontend — Multi-Agent E-commerce Assistant
+# Frontend — Multi-Agent Shopping Assistant
 
 React 19 + TypeScript + Vite + Tailwind CSS dashboard for the multi-agent backend.
 

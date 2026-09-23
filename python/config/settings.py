@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    app_name: str = "Multi-Agent E-Commerce Assistant"
+    app_name: str = "Multi-Agent Shopping Assistant"
 
     # LLM — any OpenAI-compatible endpoint
     llm_api_key: str = ""

@@ -45,7 +45,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(
-    title="Multi-Agent E-Commerce Assistant",
+    title="Multi-Agent Shopping Assistant",
     description="Supervisor routing plus profile, recall, rerank, inventory and copy agents.",
     version="2.0.0",
     lifespan=lifespan,

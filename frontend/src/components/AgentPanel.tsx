@@ -28,8 +28,6 @@ const AGENTS = [
   },
 ]
 
-const STACK = ['LangGraph', 'FastAPI', 'React 19', 'TypeScript', 'Tailwind CSS', 'SSE Streaming']
-
 function StatusDot({ status }: { status: AgentStatus }) {
   if (status === 'running') {
     return (
@@ -80,15 +78,6 @@ export default function AgentPanel({ states }: { states: Record<string, AgentSta
             </div>
           )
         })}
-      </div>
-
-      <p className="section-label mt-2 px-1">System Stack</p>
-      <div className="card flex flex-wrap gap-1.5 p-3">
-        {STACK.map((item) => (
-          <span key={item} className="chip">
-            {item}
-          </span>
-        ))}
       </div>
     </aside>
   )

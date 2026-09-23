@@ -1,4 +1,4 @@
-# Multi-Agent E-commerce Assistant
+# Multi-Agent Shopping Assistant
 
 基于 **LangGraph** 的多 Agent 电商导购系统：Supervisor 用 LLM 动态规划每个请求要跑哪些 Agent，画像、召回、重排、库存、文案各司其职，全部过程通过 SSE 实时推送到前端仪表盘。后端 FastAPI，前端 React 19 + TypeScript。
 
