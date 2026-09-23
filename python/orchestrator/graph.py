@@ -28,6 +28,7 @@ from agents import (
     UserProfileAgent,
 )
 from agents.models import build_llm
+from agents.language import language_directive
 from agents.product_rec_agent import recall_products
 from agents.structured import text_of
 from config import get_settings
@@ -50,8 +51,7 @@ reply_llm = build_llm(temperature=0.7, max_tokens=512)
 
 REPLY_SYSTEM = """You are a helpful shopping assistant closing a recommendation turn.
 Summarise the picks in 2-3 warm, concrete sentences: name the top product, why it fits
-(price, rating, tags), and one alternative. Mention stock only if something is low.
-Answer in English."""
+(price, rating, tags), and one alternative. Mention stock only if something is low."""
 
 
 def merge_dicts(left: dict | None, right: dict | None) -> dict:
@@ -62,6 +62,7 @@ class GraphState(TypedDict, total=False):
     messages: Annotated[list[AnyMessage], add_messages]
     user_id: str
     query: str
+    language: str
     plan: dict[str, Any]
     profile: UserProfile | None
     candidates: list[Product]
@@ -101,7 +102,10 @@ async def supervisor_node(state: GraphState) -> dict:
     start = time.perf_counter()
     agent_event("supervisor", "running")
 
-    result = await supervisor_agent.run(messages=state.get("messages", []))
+    result = await supervisor_agent.run(
+        messages=state.get("messages", []),
+        language=state.get("language", "en"),
+    )
     plan = result.plan
     variant = ab_engine.assign(state["user_id"])
 
@@ -136,7 +140,9 @@ async def assistant_node(state: GraphState) -> dict:
     agent_event("assistant", "running")
 
     text = ""
-    async for token in chat_agent.astream(state.get("messages", []), state["user_id"]):
+    async for token in chat_agent.astream(
+        state.get("messages", []), state["user_id"], state.get("language", "en")
+    ):
         text += token
         emit({"type": "token", "content": token})
 
@@ -223,6 +229,7 @@ async def marketing_node(state: GraphState) -> dict:
     result = await copy_agent.run(
         profile=state.get("profile"),
         products=state.get("final_products", []),
+        language=state.get("language", "en"),
     )
     profile = state.get("profile")
     emit({
@@ -272,7 +279,7 @@ async def respond_node(state: GraphState) -> dict:
 
     text = ""
     async for chunk in reply_llm.astream([
-        ("system", REPLY_SYSTEM),
+        ("system", f"{REPLY_SYSTEM}\n{language_directive(state.get('language', 'en'))}"),
         ("user", prompt),
     ]):
         token = text_of(chunk.content)

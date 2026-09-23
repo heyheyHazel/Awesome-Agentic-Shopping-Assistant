@@ -116,6 +116,7 @@ async def chat(request: ChatRequest) -> StreamingResponse:
                 "messages": [HumanMessage(content=request.message)],
                 "query": request.message,
                 "user_id": request.user_id,
+                "language": request.language,
             }
             async for mode, chunk in graph.astream(
                 inputs, config=config, stream_mode=["custom", "updates"]
@@ -154,6 +155,7 @@ async def recommend(request: RecommendRequest) -> RecommendationResponse:
             "messages": [HumanMessage(content=request.query)],
             "query": request.query,
             "user_id": request.user_id,
+            "language": request.language,
         },
         config={"configurable": {"thread_id": f"recommend-{uuid.uuid4()}"}},
     )

@@ -11,6 +11,7 @@ from data.products import PRODUCTS
 from models.schemas import SupervisorPlan, SupervisorResult, UserProfile
 
 from .base_agent import BaseAgent
+from .language import CATALOG_LANGUAGE_RULE, language_directive
 from .models import build_llm
 from .structured import JsonStructured
 
@@ -45,6 +46,7 @@ class SupervisorAgent(BaseAgent):
         self,
         messages: list[Any] | None = None,
         profile: UserProfile | None = None,
+        language: str = "en",
         **_: Any,
     ) -> SupervisorResult:
         """Ask the LLM for the plan of this turn."""
@@ -55,7 +57,14 @@ class SupervisorAgent(BaseAgent):
                 f"prefers {', '.join(profile.preferred_categories)}, "
                 f"budget ${profile.price_range[0]:.0f}-${profile.price_range[1]:.0f}."
             )
-        prompt = [SystemMessage(content=SUPERVISOR_SYSTEM + context), *(messages or [])]
+        prompt = [
+            SystemMessage(
+                content="\n".join(
+                    [SUPERVISOR_SYSTEM + context, language_directive(language), CATALOG_LANGUAGE_RULE]
+                )
+            ),
+            *(messages or []),
+        ]
         plan = await self.planner.ainvoke(prompt)
         return SupervisorResult(plan=plan)
 

@@ -1,29 +1,17 @@
 import { BrainCircuit, Radio, Target, UserRound } from 'lucide-react'
+import { useI18n } from '../i18n'
+import type { StringKey } from '../i18n'
 
-const FEATURES = [
-  {
-    icon: BrainCircuit,
-    title: 'Multi-Agent Collaboration',
-    desc: 'Supervisor plans, routes tasks and coordinates specialised agents.',
-  },
-  {
-    icon: UserRound,
-    title: 'Personalized Experience',
-    desc: 'RFM clustering and user profiling drive every ranking.',
-  },
-  {
-    icon: Target,
-    title: 'Smarter Decisions',
-    desc: 'Thompson Sampling powers data-driven A/B testing.',
-  },
-  {
-    icon: Radio,
-    title: 'Real-time Streaming',
-    desc: 'SSE streams every agent step for instant feedback.',
-  },
+const FEATURES: { icon: typeof BrainCircuit; title: StringKey; desc: StringKey }[] = [
+  { icon: BrainCircuit, title: 'feature_collab_title', desc: 'feature_collab_desc' },
+  { icon: UserRound, title: 'feature_personal_title', desc: 'feature_personal_desc' },
+  { icon: Target, title: 'feature_decision_title', desc: 'feature_decision_desc' },
+  { icon: Radio, title: 'feature_stream_title', desc: 'feature_stream_desc' },
 ]
 
 export default function Footer() {
+  const { t } = useI18n()
+
   return (
     <footer className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
       {FEATURES.map((feature) => {
@@ -34,8 +22,8 @@ export default function Footer() {
               <Icon size={15} />
             </span>
             <div>
-              <p className="text-xs font-semibold">{feature.title}</p>
-              <p className="mt-1 text-[11px] leading-relaxed text-muted">{feature.desc}</p>
+              <p className="text-xs font-semibold">{t(feature.title)}</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-muted">{t(feature.desc)}</p>
             </div>
           </div>
         )

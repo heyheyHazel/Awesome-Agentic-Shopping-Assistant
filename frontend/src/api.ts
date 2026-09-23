@@ -1,5 +1,7 @@
 import type { ExperimentInfo, ProfileResponse, UserSummary } from './types'
 
+export type ChatLanguage = 'en' | 'zh'
+
 const JSON_HEADERS = { 'Content-Type': 'application/json' }
 
 async function getJson<T>(url: string): Promise<T> {
@@ -24,6 +26,7 @@ export interface ChatStreamParams {
   userId: string
   message: string
   threadId: string | null
+  language: ChatLanguage
   signal: AbortSignal
 }
 
@@ -39,6 +42,7 @@ export async function streamChat(
       user_id: params.userId,
       message: params.message,
       thread_id: params.threadId,
+      language: params.language,
     }),
     signal: params.signal,
   })

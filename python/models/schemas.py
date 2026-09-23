@@ -143,11 +143,13 @@ class ChatRequest(BaseModel):
     user_id: str = "U001"
     message: str
     thread_id: str | None = None
+    language: Literal["en", "zh"] = "en"
 
 
 class RecommendRequest(BaseModel):
     user_id: str = "U001"
     query: str
+    language: Literal["en", "zh"] = "en"
 
 
 class UserSummary(BaseModel):

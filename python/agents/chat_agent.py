@@ -13,11 +13,12 @@ from agents.user_profile_agent import classify, compute_rfm
 from data.products import PRODUCTS
 from data.users import get_user
 
+from .language import language_directive
 from .models import build_llm
 
 CHAT_SYSTEM = """You are a friendly shopping assistant for an online store.
 Use the tools to look up the catalog and the shopper's profile before answering.
-Answer in English, stay concrete and helpful, and keep the reply under three sentences."""
+Stay concrete and helpful, and keep the reply under three sentences."""
 
 
 @tool
@@ -82,11 +83,16 @@ class ChatAgent:
             system_prompt=CHAT_SYSTEM,
         )
 
-    async def astream(self, messages: list[Any], user_id: str) -> AsyncIterator[str]:
+    async def astream(self, messages: list[Any], user_id: str, language: str = "en") -> AsyncIterator[str]:
         """Yield reply text chunks for the conversation so far."""
         inputs = {
             "messages": [
-                SystemMessage(content=f"The current shopper's user_id is {user_id}."),
+                SystemMessage(
+                    content=(
+                        f"The current shopper's user_id is {user_id}. "
+                        f"{language_directive(language)}"
+                    )
+                ),
                 *messages,
             ]
         }

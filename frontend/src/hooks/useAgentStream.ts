@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchExperiment, fetchProfile, streamChat } from '../api'
+import type { Lang } from '../i18n'
 import type {
   AgentEvent,
   AgentStatus,
@@ -27,7 +28,7 @@ function nextId(): string {
  * Owns the SSE connection to `/api/v1/chat` and keeps every panel in sync:
  * chat feed, per-agent status, user profile, A/B experiment and latency.
  */
-export function useAgentStream(userId: string) {
+export function useAgentStream(userId: string, language: Lang) {
   const [feed, setFeed] = useState<FeedItem[]>([])
   const [agentStates, setAgentStates] = useState<Record<string, AgentStatus>>({})
   const [profile, setProfile] = useState<ProfileResponse | null>(null)
@@ -72,7 +73,7 @@ export function useAgentStream(userId: string) {
 
       try {
         await streamChat(
-          { userId, message: text.trim(), threadId: threadRef.current, signal: controller.signal },
+          { userId, message: text.trim(), threadId: threadRef.current, language, signal: controller.signal },
           (event, data) => {
             switch (event) {
               case 'session':
@@ -180,7 +181,7 @@ export function useAgentStream(userId: string) {
         abortRef.current = null
       }
     },
-    [isStreaming, userId],
+    [isStreaming, userId, language],
   )
 
   const newChat = useCallback(() => {

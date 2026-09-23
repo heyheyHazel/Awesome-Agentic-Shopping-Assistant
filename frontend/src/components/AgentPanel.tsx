@@ -1,31 +1,21 @@
 import { Network, PenLine, PackageCheck, Sparkles } from 'lucide-react'
+import { useI18n } from '../i18n'
+import type { StringKey } from '../i18n'
+import type { LucideIcon } from 'lucide-react'
 import type { AgentStatus } from '../types'
 
-const AGENTS = [
-  {
-    key: 'supervisor',
-    name: 'Supervisor Agent',
-    desc: 'Plans, routes tasks and coordinates all agents.',
-    icon: Network,
-  },
-  {
-    key: 'recommendation',
-    name: 'Recommendation Agent',
-    desc: 'Recalls candidates and re-ranks them for you.',
-    icon: Sparkles,
-  },
-  {
-    key: 'copywriting',
-    name: 'Copywriting Agent',
-    desc: 'Generates product copy and messages.',
-    icon: PenLine,
-  },
-  {
-    key: 'inventory',
-    name: 'Inventory Agent',
-    desc: 'Checks stock, price and availability in real-time.',
-    icon: PackageCheck,
-  },
+interface AgentCard {
+  key: string
+  name: StringKey
+  desc: StringKey
+  icon: LucideIcon
+}
+
+const AGENTS: AgentCard[] = [
+  { key: 'supervisor', name: 'agent_supervisor', desc: 'agent_supervisor_desc', icon: Network },
+  { key: 'recommendation', name: 'agent_recommendation', desc: 'agent_recommendation_desc', icon: Sparkles },
+  { key: 'copywriting', name: 'agent_copywriting', desc: 'agent_copywriting_desc', icon: PenLine },
+  { key: 'inventory', name: 'agent_inventory', desc: 'agent_inventory_desc', icon: PackageCheck },
 ]
 
 function StatusDot({ status }: { status: AgentStatus }) {
@@ -45,9 +35,11 @@ function StatusDot({ status }: { status: AgentStatus }) {
 }
 
 export default function AgentPanel({ states }: { states: Record<string, AgentStatus> }) {
+  const { t } = useI18n()
+
   return (
     <aside className="flex flex-col gap-4">
-      <p className="section-label px-1">AI Agents</p>
+      <p className="section-label px-1">{t('agents_label')}</p>
       <div className="flex flex-col gap-3">
         {AGENTS.map((agent) => {
           const status = states[agent.key] ?? 'idle'
@@ -71,10 +63,10 @@ export default function AgentPanel({ states }: { states: Record<string, AgentSta
                 >
                   <Icon size={16} />
                 </span>
-                <p className="flex-1 text-sm font-semibold leading-tight">{agent.name}</p>
+                <p className="flex-1 text-sm font-semibold leading-tight">{t(agent.name)}</p>
                 <StatusDot status={status} />
               </div>
-              <p className="mt-2 text-xs leading-relaxed text-muted">{agent.desc}</p>
+              <p className="mt-2 text-xs leading-relaxed text-muted">{t(agent.desc)}</p>
             </div>
           )
         })}

@@ -10,6 +10,7 @@ from config import get_settings
 from models.schemas import CopyResult, CopySet, Product, UserProfile
 
 from .base_agent import BaseAgent
+from .language import language_directive
 from .models import build_llm
 from .structured import JsonStructured
 
@@ -23,7 +24,7 @@ SEGMENT_STYLES = {
 
 COPY_SYSTEM = """You write short e-commerce product copy.
 For each product write ONE sentence of at most 25 words, plain and specific — no hype words like "best ever".
-Respond in English. Keep each sentence grounded in the product data (category, price, rating, tags)."""
+Keep each sentence grounded in the product data (category, price, rating, tags)."""
 
 
 class MarketingCopyAgent(BaseAgent):
@@ -39,6 +40,7 @@ class MarketingCopyAgent(BaseAgent):
         """Write copy for each product, styled for the shopper's segment."""
         profile: UserProfile | None = kwargs.get("profile")
         products: list[Product] = kwargs.get("products", [])
+        language: str = kwargs.get("language", "en")
         if not products:
             return CopyResult()
 
@@ -50,7 +52,12 @@ class MarketingCopyAgent(BaseAgent):
         )
 
         messages = [
-            SystemMessage(content=f"{COPY_SYSTEM}\nShopper segment: {segment}. Tone: {style}."),
+            SystemMessage(
+                content=(
+                    f"{COPY_SYSTEM}\nShopper segment: {segment}. Tone: {style}.\n"
+                    f"{language_directive(language)}"
+                )
+            ),
             HumanMessage(content=f"Products:\n{product_lines}"),
         ]
         result = await self.writer.ainvoke(messages)

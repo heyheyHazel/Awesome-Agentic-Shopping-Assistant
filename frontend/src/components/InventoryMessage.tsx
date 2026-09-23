@@ -1,5 +1,6 @@
-import AgentHeader from './AgentHeader'
+import { useI18n } from '../i18n'
 import type { InventoryItem } from '../types'
+import AgentHeader from './AgentHeader'
 
 const STATUS_STYLES: Record<InventoryItem['status'], string> = {
   in_stock: 'border-success/25 bg-success-soft text-success',
@@ -7,21 +8,35 @@ const STATUS_STYLES: Record<InventoryItem['status'], string> = {
   out_of_stock: 'border-danger/25 bg-red-50 text-danger',
 }
 
-function statusLabel(item: InventoryItem): string {
-  if (item.status === 'in_stock') return `In Stock (${item.stock})`
-  if (item.status === 'low_stock') return `Low Stock (${item.stock})`
-  return 'Sold Out'
-}
-
 export default function InventoryMessage({
   items,
-  summary,
   time,
 }: {
   items: InventoryItem[]
-  summary: string
   time: string
 }) {
+  const { t, fill } = useI18n()
+
+  const statusLabel = (item: InventoryItem) => {
+    if (item.status === 'in_stock') return fill('stock_in', { n: item.stock })
+    if (item.status === 'low_stock') return fill('stock_low', { n: item.stock })
+    return t('stock_out')
+  }
+
+  const names = (filter: InventoryItem['status']) =>
+    items
+      .filter((item) => item.status === filter)
+      .map((item) => item.name)
+      .join(', ')
+
+  const outOfStock = items.some((item) => item.status === 'out_of_stock')
+  const lowStock = items.some((item) => item.status === 'low_stock')
+  const summary = outOfStock
+    ? fill('inv_out', { names: names('out_of_stock') })
+    : lowStock
+      ? fill('inv_low', { names: names('low_stock') })
+      : t('inv_all_in_stock')
+
   return (
     <div className="flex gap-2.5">
       <div className="min-w-0 flex-1">

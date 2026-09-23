@@ -1,4 +1,6 @@
 import { Star } from 'lucide-react'
+import { useI18n } from '../i18n'
+import type { StringKey } from '../i18n'
 import type { Product } from '../types'
 
 const CATEGORY_EMOJI: Record<string, string> = {
@@ -26,17 +28,17 @@ const BADGE_TONES: Record<string, string> = {
 
 /** First result = Best Match, next best rating = High Rated, cheapest remaining = Great Value. */
 function computeBadges(products: Product[]) {
-  const badges = new Map<string, { label: string; tone: string }>()
+  const badges = new Map<string, { label: StringKey; tone: string }>()
   const assigned = new Set<string>()
   if (products.length === 0) return badges
 
-  badges.set(products[0].product_id, { label: 'Best Match', tone: 'brand' })
+  badges.set(products[0].product_id, { label: 'badge_best', tone: 'brand' })
   assigned.add(products[0].product_id)
 
   const remaining = products.filter((product) => !assigned.has(product.product_id))
   const topRated = [...remaining].sort((a, b) => b.rating - a.rating)[0]
   if (topRated) {
-    badges.set(topRated.product_id, { label: 'High Rated', tone: 'success' })
+    badges.set(topRated.product_id, { label: 'badge_rated', tone: 'success' })
     assigned.add(topRated.product_id)
   }
 
@@ -44,12 +46,13 @@ function computeBadges(products: Product[]) {
     .filter((product) => !assigned.has(product.product_id))
     .sort((a, b) => a.price - b.price)[0]
   if (cheapest) {
-    badges.set(cheapest.product_id, { label: 'Great Value', tone: 'warning' })
+    badges.set(cheapest.product_id, { label: 'badge_value', tone: 'warning' })
   }
   return badges
 }
 
 export default function ProductCards({ products }: { products: Product[] }) {
+  const { t, category, tag } = useI18n()
   const badges = computeBadges(products)
 
   return (
@@ -64,7 +67,7 @@ export default function ProductCards({ products }: { products: Product[] }) {
               </span>
               {badge && (
                 <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${BADGE_TONES[badge.tone]}`}>
-                  {badge.label}
+                  {t(badge.label)}
                 </span>
               )}
             </div>
@@ -80,12 +83,14 @@ export default function ProductCards({ products }: { products: Product[] }) {
             <p className="mt-2 text-base font-bold text-brand">${product.price.toFixed(2)}</p>
 
             <div className="mt-2 flex flex-wrap gap-1">
-              {product.tags.slice(0, 3).map((tag) => (
-                <span key={tag} className="chip !px-2 !py-0.5 !text-[10px]">
-                  {tag}
+              {product.tags.slice(0, 3).map((item) => (
+                <span key={item} className="chip !px-2 !py-0.5 !text-[10px]">
+                  {tag(item)}
                 </span>
               ))}
             </div>
+
+            <p className="mt-2 text-[11px] text-faint">{category(product.category)}</p>
           </div>
         )
       })}

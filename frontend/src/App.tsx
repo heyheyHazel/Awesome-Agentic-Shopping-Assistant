@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { fetchUsers } from './api'
+import { useI18n } from './i18n'
 import { useAgentStream } from './hooks/useAgentStream'
 import type { UserSummary } from './types'
 import Header from './components/Header'
@@ -9,10 +10,11 @@ import ProfilePanel from './components/ProfilePanel'
 import Footer from './components/Footer'
 
 export default function App() {
+  const { lang } = useI18n()
   const [users, setUsers] = useState<UserSummary[]>([])
   const [userId, setUserId] = useState('U001')
   const { feed, agentStates, profile, experiment, latencyMs, timings, isStreaming, send, newChat } =
-    useAgentStream(userId)
+    useAgentStream(userId, lang)
 
   useEffect(() => {
     fetchUsers()

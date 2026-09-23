@@ -27,8 +27,10 @@ class StubStructured:
 
     def __init__(self, result):
         self.result = result
+        self.calls: list = []
 
-    async def ainvoke(self, _messages):
+    async def ainvoke(self, messages):
+        self.calls.append(messages)
         return self.result
 
 
@@ -44,7 +46,7 @@ class StubReplyLLM:
 
 
 class StubChatAgent:
-    async def astream(self, _messages, _user_id):
+    async def astream(self, _messages, _user_id, _language="en"):
         yield "Hello "
         yield "there!"
 
@@ -124,6 +126,22 @@ async def test_rerank_failure_degrades_to_recall_order(monkeypatch):
     assert result["ranked"] == []
     assert len(result["final_products"]) == 3
     assert result["reply"] == "Great choice!"
+
+
+async def test_language_directive_reaches_the_supervisor(monkeypatch):
+    planner = StubStructured(SupervisorPlan(intent="general", reply="你好！", agents=[]))
+    monkeypatch.setattr(graph_module.supervisor_agent, "planner", planner)
+    monkeypatch.setattr(graph_module, "chat_agent", StubChatAgent())
+
+    graph = build_graph()
+    await graph.ainvoke(
+        {"messages": [HumanMessage(content="你好")], "query": "你好", "user_id": "U001", "language": "zh"},
+        config={"configurable": {"thread_id": "lang-1"}},
+    )
+
+    system_prompt = planner.calls[0][0].content
+    assert "Simplified Chinese" in system_prompt
+    assert "English catalog terms" in system_prompt
 
 
 async def test_checkpointer_keeps_conversation_history(monkeypatch):
