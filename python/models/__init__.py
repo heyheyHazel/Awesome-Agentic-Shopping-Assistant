@@ -1,0 +1,31 @@
+from .schemas import (
+    UserProfile,
+    Product,
+    RecommendationRequest,
+    RecommendationResponse,
+    AgentResult,
+    UserProfileResult,
+    ProductRecResult,
+    MarketingCopyResult,
+    InventoryResult,
+    ChatMessage,
+    ChatRequest,
+    ShoppingIntent,
+    ChatResult,
+)
+
+__all__ = [
+    "UserProfile",
+    "Product",
+    "RecommendationRequest",
+    "RecommendationResponse",
+    "AgentResult",
+    "UserProfileResult",
+    "ProductRecResult",
+    "MarketingCopyResult",
+    "InventoryResult",
+    "ChatMessage",
+    "ChatRequest",
+    "ShoppingIntent",
+    "ChatResult",
+]
