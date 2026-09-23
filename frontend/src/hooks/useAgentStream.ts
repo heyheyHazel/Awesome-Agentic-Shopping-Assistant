@@ -8,7 +8,6 @@ import type {
   ExperimentInfo,
   FeedItem,
   InventoryEvent,
-  MarketingEvent,
   PlanEvent,
   ProfileResponse,
   Product,
@@ -107,15 +106,6 @@ export function useAgentStream(userId: string, language: Lang) {
                 setFeed((prev) => [
                   ...prev,
                   { kind: 'products', id: nextId(), products: payload.products, time: now() },
-                ])
-                break
-              }
-              case 'marketing': {
-                const payload = data as MarketingEvent
-                const textLines = payload.items.map((item) => item.text).join('\n')
-                setFeed((prev) => [
-                  ...prev,
-                  { kind: 'agent', id: nextId(), agent: 'copywriting', text: textLines, time: now() },
                 ])
                 break
               }

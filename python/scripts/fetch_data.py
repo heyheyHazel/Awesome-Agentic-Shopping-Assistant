@@ -4,11 +4,11 @@ The raw dataset is NOT committed to the repository (no upstream license), so a
 fresh clone runs on the built-in mock catalog until this script is executed.
 
 Usage:
-    python scripts/fetch_data.py                    # both persona shards from the HF mirror
-    python scripts/fetch_data.py --source cdn       # single gzipped file from jsDelivr
-    python scripts/fetch_data.py --limit 500        # cap products per file
-    python scripts/fetch_data.py --force            # re-download raw files
-    python scripts/fetch_data.py --source local --files persona.jsonl --raw-dir /path/to/jsonl
+    python scripts/fetch_data.py                    # full catalog (~24 MB), auto mirror
+    python scripts/fetch_data.py --source hf         # force the HF mirror
+    python scripts/fetch_data.py --limit 500         # cap records read
+    python scripts/fetch_data.py --force             # re-download raw files
+    python scripts/fetch_data.py --source local --files records.jsonl --raw-dir /path/to/dir
 
 Outputs (all gitignored):
     data/raw/*.jsonl                  untouched upstream records
@@ -39,14 +39,14 @@ CDN_ENDPOINT = "https://cdn.jsdelivr.net/gh/ShopAgent-Team/ShopSimulator@main/sh
 USER_AGENT = "shopping-assistant-fetch/1.0"
 
 # `hf` splits products and personas across two shards, `cdn` ships one gzipped file.
-SOURCE_FILES = {
-    "hf": ("fine_items_eval_persona.jsonl", "fine_items_train_persona.jsonl"),
-    "cdn": ("fine_items_eval_train_all.json.gz",),
-}
-SOURCE_HOSTS = {
-    "hf": f"{HF_ENDPOINT}/datasets/{DATASET}/resolve/main",
-    "cdn": CDN_ENDPOINT,
-}
+# The same catalog is packaged two ways. The gzipped array is ~24 MB against the
+# mirror's ~104 MB JSON Lines, so it is preferred; both hold all 23,421 products,
+# 4,666 of which carry a user_persona.
+MIRRORS = (
+    ("cdn", CDN_ENDPOINT, "fine_items_eval_train_all.json.gz"),
+    ("hf", f"{HF_ENDPOINT}/datasets/{DATASET}/resolve/main", "fine_items_eval_train_all.jsonl"),
+)
+DEFAULT_MIRROR = MIRRORS[0]
 
 RAW_DIR = REPO_ROOT / "data" / "raw"
 OUT_DIR = REPO_ROOT / "data" / "generated"
@@ -293,31 +293,37 @@ def read_records(path: Path, limit: int | None) -> Iterable[dict[str, Any]]:
 
 # ── entry point ───────────────────────────────────────────────────────
 
+def resolve_sources(source: str, files: list[str] | None, raw_dir: Path, *, force: bool) -> list[Path]:
+    """Pick the files to convert, falling through the mirrors when one is unreachable."""
+    if source == "local":
+        if not files:
+            raise SystemExit("--source local requires --files")
+        missing = [name for name in files if not (raw_dir / name).exists()]
+        if missing:
+            raise SystemExit(f"missing in {raw_dir}: {', '.join(missing)}")
+        return [raw_dir / name for name in files]
+
+    candidates = [mirror for mirror in MIRRORS if source in ("auto", mirror[0])]
+    for name, host, default_file in candidates:
+        wanted = files or [default_file]
+        try:
+            return [download(entry, host, force=force) for entry in wanted]
+        except (urllib.error.URLError, http.client.HTTPException, OSError, TimeoutError) as exc:
+            print(f"  mirror {name} unreachable ({exc}); trying the next one", file=sys.stderr)
+    raise SystemExit("no mirror served the catalog; retry when the network recovers")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--files", nargs="+", default=None, help="override the file list for the chosen source")
     parser.add_argument("--limit", type=int, default=None, help="cap records read per file")
     parser.add_argument("--force", action="store_true", help="re-download even if cached")
-    parser.add_argument("--source", choices=["hf", "cdn", "local"], default="hf",
-                        help="hf = HF mirror, cdn = jsDelivr, local = read --raw-dir")
+    parser.add_argument("--source", choices=["auto", "cdn", "hf", "local"], default="auto",
+                        help="auto = try each mirror in turn, local = read --raw-dir")
     parser.add_argument("--raw-dir", type=Path, default=RAW_DIR, help="directory holding raw jsonl files")
     args = parser.parse_args()
 
-    files = args.files or (() if args.source == "local" else SOURCE_FILES[args.source])
-    if args.source == "local" and not files:
-        parser.error("--source local requires --files")
-
-    host = SOURCE_HOSTS.get(args.source, "")
-    sources: list[Path] = []
-    for name in files:
-        if args.source == "local":
-            candidate = args.raw_dir / name
-            if not candidate.exists():
-                print(f"  missing  {candidate}", file=sys.stderr)
-                continue
-            sources.append(candidate)
-        else:
-            sources.append(download(name, host, force=args.force))
+    sources = resolve_sources(args.source, args.files, args.raw_dir, force=args.force)
 
     products: dict[str, dict[str, Any]] = {}
     shoppers: dict[str, dict[str, Any]] = {}

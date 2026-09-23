@@ -1,16 +1,17 @@
 # Multi-Agent Shopping Assistant
 
-基于 **LangGraph** 的多 Agent 电商导购系统：Supervisor 用 LLM 动态规划每个请求要跑哪些 Agent，画像、召回、重排、库存、文案各司其职，全部过程通过 SSE 实时推送到前端仪表盘。后端 FastAPI，前端 React 19 + TypeScript。
+基于 **LangGraph** 的多 Agent 电商导购系统：Supervisor 用 LLM 解析每个请求的意图与检索参数，画像、召回、库存、精排+文案各司其职，全部过程通过 SSE 实时推送到前端仪表盘。后端 FastAPI，前端 React 19 + TypeScript。
 
 ## 亮点
 
-- **Supervisor 动态调度**：LLM 输出结构化执行计划（意图 + 检索参数 + 要运行的 Agent 子集），简单问题跳过画像/文案等阶段，不是写死的流水线
-- **并行流水线**：`画像 ∥ 召回 → LLM 重排 ∥ 库存校验 → 聚合 → 文案 → 流式总结`，LangGraph 原生扇出/汇合
-- **全程实时流**：Agent 状态、商品卡片、文案、库存、逐字回复都以事件流推送，前端三栏同步刷新
+- **每轮只花 2 次 LLM 调用**：查询理解 1 次，排序 + 文案合并 1 次；召回、库存、过滤、回复组装全是确定性代码，实测 0 ms
+- **混合召回**：关键词召回 + **本地 ONNX 语义向量召回**（`bge-small-zh-v1.5`，用 RRF 融合）。无需 torch（约 2 GB）、无需 embedding API，完全离线；实测「夏天穿的连衣裙」「卧室香薰」这类自然语言都能命中
+- **硬约束不妥协**：预算 / 类目 / 品牌是过滤器，**永不为了让列表非空而放宽**；确实无合适商品时由排序模型返回空列表，前端提示「没有符合条件的商品」
+- **意图路由**：Supervisor 判断是购物咨询还是通用问答，后者走独立的 tool-calling Agent（`search_catalog` / `get_shopper_profile`）
+- **全程实时流**：Agent 状态、商品卡片、库存、逐字回复都以事件流推送，前端三栏同步刷新
 - **对话记忆**：LangGraph Checkpointer 按 `thread_id` 保存上下文，支持「便宜点的」「那白色的呢」这类追问
-- **工具调用**：通用问答复用一个 tool-calling Agent（`search_catalog` / `get_shopper_profile`），回答基于真实目录数据
 - **跨服务商的结构化输出**：`JsonStructured`（JSON 模式 + schema 注入），同时兼容 OpenAI 与 DeepSeek thinking 模型
-- **稳健性**：每个 Agent 独立超时熔断、指数退避重试、失败降级（重排挂了就按召回顺序继续）
+- **稳健性**：每个 Agent 独立超时熔断、指数退避重试、失败降级（排序挂了就按召回顺序继续）；硬约束（预算/类目）永不为了让列表非空而放宽
 - **A/B 测试**：一致性哈希分桶 + Thompson Sampling 动态调权
 - **中英双语**：右上角一键切换，界面文案、商品类目/标签、LLM 回复语言同步切换；支持 `?lang=zh` 链接直达
 
@@ -21,42 +22,44 @@
 | 区域 | 内容 |
 |------|------|
 | 左栏 | 4 个 Agent 状态卡片（空闲 / 运行中 / 完成）+ 技术栈 |
-| 中栏 | 对话流：Supervisor 回复、商品卡片（Best Match / High Rated / Great Value）、文案、库存徽章、逐字流式总结；底部输入框 + SSE 连接状态 |
+| 中栏 | 对话流：Supervisor 回复、商品卡片（Best Match / High Rated / Great Value）、库存徽章、逐字流式推荐语；底部输入框 + SSE 连接状态 |
 | 右栏 | 用户画像（VIP、RFM Segment、R/F/M 数值）、RFM 客群聚类、A/B 实验面板（转化率 + Winner）、响应耗时（含各 Agent 分解） |
 
 ## 系统架构
 
 ```mermaid
 graph TD
-    START([用户消息]) --> SUP["Supervisor Agent<br/>结构化计划：intent + 检索参数 + agents 子集"]
+    START([用户消息]) --> SUP["Supervisor Agent<br/>LLM ①：意图 + 检索参数"]
     SUP -->|"general"| CHAT["Chat Agent<br/>工具调用：search_catalog / get_shopper_profile"]
-    SUP -->|"product_search"| PROFILE["Profile Agent<br/>RFM 画像（可选）"]
-    SUP -->|"product_search"| RECALL["Recall<br/>目录关键词/预算过滤"]
-    PROFILE --> RERANK["Rerank Agent<br/>LLM 结构化排序"]
-    RECALL --> RERANK
-    RERANK --> AGG["Aggregate<br/>库存过滤 → Top-3"]
+    SUP -->|"product_search"| PROFILE["Profile Agent<br/>分位 RFM 画像"]
+    PROFILE --> RECALL["Recall<br/>关键词/预算/类目过滤"]
     RECALL --> INV["Inventory Agent<br/>库存 + 限购"]
-    INV --> AGG
-    AGG -->|"plan 含 copy"| COPY["Copy Agent<br/>分群文案"]
-    AGG -->|"跳过"| RESP["Respond<br/>token 流式总结"]
-    COPY --> RESP
+    INV --> FILTER["Filter<br/>缺货剔除 → 候选清单"]
+    FILTER -->|"候选非空"| REC["Recommend Agent<br/>LLM ②：排序 + 文案一次产出"]
+    FILTER -->|"无匹配"| RESP
+    REC --> RESP["Respond<br/>商品卡片 / 库存 / 逐字推荐语（无 LLM）"]
     CHAT --> DONE([SSE 事件流])
     RESP --> DONE
 
     style SUP fill:#e3f2fd
-    style RERANK fill:#e8f5e9
-    style COPY fill:#fff3e0
+    style REC fill:#e8f5e9
+    style RESP fill:#fff3e0
 ```
+
+### 为什么只有两次 LLM 调用
+
+画像、召回、库存、过滤、组装回复都不需要模型，实测每项 0.0–1.4 ms，而一次 LLM 调用是 1–2 s，所以把它们拆成独立节点不会更快。排序和写推荐语输入相同、只差产出内容，因此合并进同一次结构化调用。
+
+> 注意：LangGraph 里一个有多条不同层级入边的节点会**每个 superstep 执行一次**。把 `profile → filter` 与 `inventory → filter` 分开连（`inventory` 比 `profile` 晚一个 superstep 完成）会让下游 LLM 调用静默翻倍；现为单链，`tests/test_graph.py::test_a_shopping_turn_costs_exactly_two_llm_calls` 守住这一点。
 
 ## Agent 一览
 
 | Agent | 类型 | 职责 | 实现 |
 |-------|------|------|------|
-| `SupervisorAgent` | LLM 结构化输出 | 意图路由 + 动态调度计划 | `agents/supervisor_agent.py` |
-| `UserProfileAgent` | 确定性计算 | RFM 打分 + 客群分类 | `agents/user_profile_agent.py` |
-| `ProductRecAgent` | 规则 + LLM | 目录召回 + LLM 重排 | `agents/product_rec_agent.py` |
+| `SupervisorAgent` | LLM 结构化输出 | 意图路由 + 检索参数抽取 | `agents/supervisor_agent.py` |
+| `UserProfileAgent` | 确定性计算 | 分位 RFM 打分 + 客群分类 | `agents/user_profile_agent.py` |
+| `ProductRecAgent` | 规则召回 + LLM | 目录召回，以及排序 + 文案（一次调用） | `agents/product_rec_agent.py` |
 | `InventoryAgent` | 确定性计算 | 缺货过滤、低库存预警、限购 | `agents/inventory_agent.py` |
-| `MarketingCopyAgent` | LLM 结构化输出 | 按客群生成商品文案 | `agents/marketing_copy_agent.py` |
 | `ChatAgent` | LLM 工具调用 | 通用问答（目录/画像工具） | `agents/chat_agent.py` |
 
 ## 快速开始
@@ -81,6 +84,7 @@ cp .env.example .env
 
 # 拉取 ShopSimulator 真实商品与用户画像（约 27 MB，未执行则自动回落内置演示数据）
 python scripts/fetch_data.py
+python scripts/build_index.py         # 语义召回索引（首次会自动下载约 24 MB 模型）
 
 python main.py                        # http://localhost:8000
 ```
@@ -168,16 +172,19 @@ docker compose up -d                  # API: http://localhost:8000
 │   ├── orchestrator/graph.py       # LangGraph 状态图（核心编排）
 │   ├── agents/
 │   │   ├── supervisor_agent.py     # LLM 计划与路由
-│   │   ├── user_profile_agent.py   # RFM 画像
-│   │   ├── product_rec_agent.py    # 召回 + LLM 重排
+│   │   ├── user_profile_agent.py   # 分位 RFM 画像
+│   │   ├── product_rec_agent.py    # 召回 + 排序/文案（一次调用）
 │   │   ├── inventory_agent.py      # 库存决策
-│   │   ├── marketing_copy_agent.py # 分群文案
 │   │   ├── chat_agent.py           # 工具调用助手
 │   │   ├── structured.py           # 跨服务商结构化输出
 │   │   ├── models.py               # ChatOpenAI 工厂
 │   │   └── base_agent.py           # 超时 / 重试 / 降级基类
-│   ├── data/                       # 演示商品目录与用户
+│   ├── data/                       # 商品目录与用户（含生成的向量索引）
 │   ├── services/ab_test.py         # A/B + Thompson Sampling
+│   ├── services/embeddings.py      # 本地 ONNX 文本向量（无需 torch）
+│   ├── services/vector_index.py    # 目录向量索引 + 余弦检索
+│   ├── scripts/fetch_data.py       # 下载并转换 ShopSimulator 数据
+│   ├── scripts/build_index.py      # 构建语义召回索引
 │   ├── models/schemas.py           # Pydantic 模型
 │   ├── config/settings.py          # 环境配置
 │   └── tests/                      # 15 个测试（桩 LLM）
@@ -197,18 +204,38 @@ docker compose up -d                  # API: http://localhost:8000
 
 ```bash
 cd python
-python scripts/fetch_data.py                 # HF 镜像，两个 persona 分片
-python scripts/fetch_data.py --source cdn    # 备用源：jsDelivr 上的单个 gz 文件
+python scripts/fetch_data.py                 # 完整库 23,421 条，约 24 MB，镜像自动回退
+python scripts/fetch_data.py --source hf     # 强制走 HF（同一份数据，~104 MB jsonl）
 ```
 
-自 [ShopSimulator](https://github.com/ShopAgent-Team/ShopSimulator)（arXiv 2601.18225）转换而来：
+自 [ShopSimulator](https://github.com/ShopAgent-Team/ShopSimulator)（arXiv 2601.18225）转换而来。上游把同一份目录打成两种包：环境仓库里是 24 MB 的 gz 数组，HF 上是 104 MB 的 JSON Lines，**内容相同**（实测都是 23,421 条记录）。
 
-- **商品**：真实中文电商商品（标题、三级类目、店铺、CNY 价格、属性标签、SKU、图片 URL），9 个一级类目
-- **用户**：每条商品自带 `user_persona`，含会员等级、近 90 天订单数、近 30 天消费额、复购率、类目/品牌偏好、价格区间、14 天搜索词与收藏加购记录
+- **商品**：真实中文电商商品（标题、三级类目、店铺、CNY 价格、属性标签、SKU、图片 URL），9 个一级类目，23,315 件通过价格清洗
+- **用户**：其中 4,666 条带 `user_persona`（4,009 个唯一用户），含会员等级、近 90 天订单数、近 30 天消费额、复购率、类目/品牌偏好、价格区间、14 天搜索词与收藏加购记录
+
+> 只要 persona 分片（4,638 件商品）的话，用它当 `--files` 即可，但那些记录本来就是完整库的子集，没有理由这么取。
 
 上游数据集**没有 license**，因此数据不入库：`python/data/raw/` 与 `python/data/generated/` 已在 `.gitignore` 中，clone 后需自行执行脚本。
 
 商品缺少评分、评价数与库存，这三项由 asin 的确定性哈希**合成**（保证同商品永远同值），代码中标注为 SYNTHETIC；`recency_days` 同样由复购率推导，因数据集不含「距上次购买天数」。
+
+## 语义召回
+
+```bash
+cd python
+python scripts/build_index.py            # 23315 件约 67s；首次会下载约 24 MB 模型
+```
+
+- 模型：`BAAI/bge-small-zh-v1.5` 的 int8 ONNX 版本，跑在 `onnxruntime` 上——**不需要 torch**，也不需要 embedding API
+- 索引：`data/generated/embeddings.npy`（512 维，L2 归一化，点积即余弦）；文件被 gitignore，模型在 `data/models/`
+- 检索：关键词与向量两路各自排序，用 **RRF** 融合（比标定「关键词分」与「余弦相似度」的权重稳得多）
+- 约束：硬过滤先算好合规商品集合，**向量检索与排序都只在该集合内进行**（子集矩阵乘，所以预算/类目越窄越快），最后在 `recall_products` 出口再校验一次
+- 降级：索引缺失、商品目录变化（id 对不上）或模型未下载时，自动回落纯关键词召回，不会报错
+- 速度：召回中位 **7–9 ms**（带预算/类目过滤时）到 34 ms（全库无过滤），相对秒级的 LLM 调用可忽略
+
+### 一个实测无效的做法
+
+本来想用「余弦相似度低于阈值就算无匹配」，在真实目录上标定后发现**不可行**：应命中的查询 top-1 最低 0.600，应不命中的最高 0.602，两类几乎完全重叠；换成相对分布（z 分数）也一样（3.85–4.84 vs 3.02–5.39）。所以没有采用相似度阈值，而是让排序模型在候选都不合适时返回空列表——已实测生效（「想买一双 1 元以内的跑鞋」「我要买一架私人飞机」都正确判空）。
 
 ### 内置演示数据（回落）
 

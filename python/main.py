@@ -175,7 +175,7 @@ async def recommend(request: RecommendRequest) -> RecommendationResponse:
         user_id=request.user_id,
         reply=result.get("reply", ""),
         products=result.get("final_products", []),
-        copies=result.get("copies", []),
+        copies=result.get("pitches", []),
         inventory=[i for i in result.get("inventory", []) if i.product_id in final_ids],
         experiment=ab_engine.info(request.user_id),
         latency_ms=round((time.perf_counter() - start) * 1000, 1),

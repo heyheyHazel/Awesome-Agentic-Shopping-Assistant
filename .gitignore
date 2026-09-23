@@ -23,6 +23,8 @@ node_modules/
 # `python scripts/fetch_data.py` instead of committing it)
 python/data/raw/
 python/data/generated/
+# Local ONNX embedding model, pulled by `python scripts/build_index.py`
+python/data/models/
 
 # OS
 .DS_Store

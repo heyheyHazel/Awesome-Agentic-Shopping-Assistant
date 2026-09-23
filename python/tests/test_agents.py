@@ -1,11 +1,23 @@
 """Agent behaviour: RFM profiling, catalog recall, inventory classification."""
 
 from agents.inventory_agent import InventoryAgent
-from agents.product_rec_agent import recall_products
+from agents.product_rec_agent import ProductRecAgent, recall_products
 from agents.user_profile_agent import SEGMENTS, RFMScale, classify, compute_rfm
 from config.currency import currency_code, currency_symbol
 from data import USERS, DemoUser
-from models.schemas import Product, SearchParams
+from models.schemas import Product, ProductRanking, SearchParams
+
+
+def _product(product_id: str) -> Product:
+    return Product(product_id=product_id, name=f"product {product_id}", category="Test", price=10.0)
+
+
+class StubStructured:
+    def __init__(self, result):
+        self.result = result
+
+    async def ainvoke(self, _messages):
+        return self.result
 
 
 def test_each_demo_user_gets_a_distinct_segment():
@@ -56,6 +68,12 @@ def test_recall_matches_keywords():
 def test_recall_falls_back_when_nothing_matches():
     products = recall_products(SearchParams(keywords=["spaceship"]))
     assert len(products) == 12
+
+
+def test_recall_never_violates_the_hard_filters():
+    """An empty result must stay empty rather than fall back to the whole catalog."""
+    assert recall_products(SearchParams(keywords=["护肤"], max_price=0.5)) == []
+    assert recall_products(SearchParams(keywords=["护肤"], category="不存在的类目")) == []
 
 
 def test_currency_defaults_to_cny():

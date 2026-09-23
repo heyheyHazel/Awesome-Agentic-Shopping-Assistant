@@ -12,11 +12,10 @@ FastAPI (python/main.py)
   │  graph.astream(stream_mode=["custom", "updates"])
   ▼
 LangGraph 状态图 (python/orchestrator/graph.py)
-  ├── SupervisorAgent   LLM 结构化输出 → 执行计划
-  ├── UserProfileAgent  确定性 RFM 计算
-  ├── ProductRecAgent   目录召回 + LLM 重排
+  ├── SupervisorAgent   LLM 结构化输出 → 意图 + 检索参数
+  ├── UserProfileAgent  确定性分位 RFM 计算
+  ├── ProductRecAgent   目录召回 + LLM 排序与文案
   ├── InventoryAgent    库存规则
-  ├── MarketingCopyAgent LLM 结构化文案
   └── ChatAgent         create_agent 工具调用
       │
       ▼
@@ -26,22 +25,23 @@ OpenAI 兼容 LLM API（DeepSeek / OpenAI / …）
 ## 2. 图结构
 
 ```
-START → supervisor
+START → supervisor                                    ← LLM ①
           ├─ general        → assistant → END
-          └─ product_search → [profile?, recall]
-                                     ↓        ↓
-                                  rerank    inventory
-                                     ↓        ↓
-                                 aggregate
-                                     ├─ copy? → marketing
-                                     └────────→ respond → END
+          └─ product_search → profile → recall → inventory → filter
+                                                              │
+                                ┌─────────────────────────────┴──────────┐
+                      候选非空  │                                        │ 无匹配
+                                ▼                                        ▼
+                      recommend → respond → END                  respond → END
+                       ↑ LLM ②
 ```
 
 关键设计：
 
-- **条件扇出**：`route_supervisor` 返回目标节点列表（LangGraph 支持列表形式的扇出），`profile` 只在计划包含时执行，未触发的分支不会阻塞下游汇合（已用测试验证）
-- **隐式汇合**：`rerank` / `inventory` 都有来自 `profile` 与 `recall` 的入边，LangGraph 保证汇合节点每个超步只执行一次，不会重复调用 LLM
-- **条件跳过**：`aggregate` 之后按计划决定是否进入 `marketing`，快速事实类问题可以省掉一次 LLM 文案调用
+- **每轮两次 LLM 调用**：查询理解（`supervisor`）与排序 + 文案（`recommend`）。其余节点是确定性代码，实测每项 0.0–1.4 ms
+- **单链而非扇出**：确定性节点串成一条直线——它们都是毫秒级，并行不会更快。更重要的是，LangGraph 中一个有多条不同层级入边的节点会**每个超步执行一次**；把 `profile → filter` 与 `inventory → filter` 分开连（`inventory` 比 `profile` 晚一个超步完成）会让下游 LLM 调用静默翻倍（`tests/test_graph.py` 的调用计数测试守住这一点）
+- **单调收窄**：`candidates` 从召回开始逐级收窄（库存过滤 → 候选上限），排序前就剔除缺货商品，不让模型为买不到的东西花一次调用
+- **条件跳过**：`filter` 后候选为空时直接进入 `respond`，省掉整次排序调用
 
 ## 3. 图状态（GraphState）
 
@@ -51,10 +51,9 @@ START → supervisor
 | `user_id` / `query` | `str` | 当前请求上下文 |
 | `plan` | `dict` | SupervisorPlan 序列化结果 |
 | `profile` | `UserProfile \| None` | 画像节点输出 |
-| `candidates` | `list[Product]` | 召回候选 |
-| `ranked` | `list[Product]` | LLM 重排结果 |
+| `candidates` | `list[Product]` | 召回候选，经库存过滤与候选上限逐级收窄 |
 | `inventory` / `available_ids` | 列表 | 库存节点输出 |
-| `copies` | `list[CopyItem]` | 文案节点输出 |
+| `pitches` | `list[CopyItem]` | 排序调用同时产出的推荐语 |
 | `final_products` | `list[Product]` | 聚合后的展示商品 |
 | `reply` | `str` | 本轮回复文本 |
 | `timings` | `Annotated[dict, merge_dicts]` | 各节点耗时，使用自定义 reducer 合并并行写入 |
@@ -67,17 +66,16 @@ START → supervisor
 |------|-----|----------|----------|
 | `supervisor` | 结构化计划 | `agent`(×2), `plan`, `experiment` | 计划回退为 general + 请用户重述 |
 | `assistant` | 工具调用流式 | `agent`(×2), `token` | 节点内捕获异常，输出错误提示 |
-| `profile` | 确定性 | `agent`(×2), `profile` | 无画像继续（重排按通用规则） |
-| `recall` | 确定性 | `agent`(running) | 关键词无命中时回退到全目录按评分排序 |
-| `rerank` | 结构化排序 | `agent`(done) | 返回空 ranked，聚合使用召回顺序 |
-| `inventory` | 确定性 | — | 输出超时则跳过库存过滤 |
-| `aggregate` | — | `products` | 过滤后为空时回退到完整排名 |
-| `marketing` | 结构化文案 | `agent`(×2), `marketing` | 返回空列表，跳过文案气泡 |
-| `respond` | 流式总结 | `agent`(×2), `inventory`, `token` | token 失败输出兜底文本 |
+| `profile` | 确定性 | `agent`(×2), `profile` | 无画像继续（排序按通用规则） |
+| `recall` | 确定性 | `agent`(running) | 约束全不命中时返回空列表，**不**放宽预算/类目 |
+| `inventory` | 确定性 | `agent`(×2) | 输出超时则跳过库存过滤 |
+| `filter` | 确定性 | — | 候选为空则不进入排序 |
+| `recommend` | 结构化：排序 + 文案 | `agent`(×2) | 返回空结果，`respond` 回退到候选顺序 |
+| `respond` | — | `products`, `inventory`, `agent`(×2), `token` | 无商品时不发 token |
 
-`respond` 在流式输出前补发 `inventory` 事件（只含最终商品），保证前端聊天内的消息顺序为：商品 → 文案 → 库存 → 总结。
+`respond` 不发 LLM 调用：它在发出 `products` 与 `inventory` 后，把 `recommend` 已经写好的推荐语分块作为 `token` 事件推给前端，保证聊天内消息顺序为：商品卡片 → 库存 → 逐字推荐语。
 
-## 5. 动态调度规则
+## 5. 计划与路由
 
 `SupervisorAgent` 用 `JsonStructured` 让 LLM 输出 `SupervisorPlan`：
 
@@ -85,14 +83,14 @@ START → supervisor
 {
   "intent": "product_search | general",
   "reply": "一句即时确认，如 Got it! Here are the best running shoes for you.",
-  "search": { "keywords": [], "category": "", "brand": "", "min_price": null, "max_price": 120 },
-  "agents": ["profile", "recall", "rerank", "inventory", "copy"]
+  "search": { "keywords": [], "category": "", "brand": "", "min_price": null, "max_price": 120 }
 }
 ```
 
-- `route_supervisor`：`intent=general` → `assistant`；否则扇出 `recall`（必需）+ `profile`（计划包含时）
-- `route_aggregate`：`agents` 含 `copy` 才进入 `marketing`
-- 计划提示词要求：产品检索必须含 `recall/rerank/inventory`；大多数情况加 `profile`；需要营销文案才加 `copy`；闲聊为空列表
+- `route_supervisor`：`intent=general` → `assistant`，否则走 `profile` 起头的确定性流水线
+- `route_filter`：候选非空 → `recommend`，否则直接 `respond`
+- 计划里不再有 `agents` 枚举：哪些阶段能省由代码决定（候选为空就跳过排序），不需要模型判断
+- `catalog_language_rule()` 依据**实际加载的商品类目**推断检索词语言（ShopSimulator 中文目录 vs 内置英文演示目录），不再写死英文
 
 ## 6. 流式协议
 
@@ -106,13 +104,13 @@ yield _sse("done", {"latency_ms": ..., "timings": {...}})
 ```
 
 - 节点通过 `get_stream_writer()` 发出 custom 事件（`emit()` 封装，非流式 `ainvoke` 下自动静默）
-- token 由 `assistant` / `respond` 两个节点显式转发，因此监督者/重排等结构化调用的中间 token 不会泄漏到前端
+- token 只有两个来源：`assistant`（工具调用 Agent 的真实流式输出）与 `respond`（分块推送已生成的推荐语）；结构化调用的中间 token 不会泄漏到前端
 
 前端 `useAgentStream` 的顺序处理：
 
 ```
 session → (agent 状态更新 | plan → Supervisor 气泡) → profile(右栏)
-        → products(卡片) → marketing(气泡) → inventory(气泡)
+        → products(卡片) → inventory(气泡)
         → token(逐字追加到 Assistant 气泡) → done(耗时)
 ```
 
@@ -140,28 +138,33 @@ session → (agent 状态更新 | plan → Supervisor 气泡) → profile(右栏
 
 ## 10. RFM 与客群规则
 
+分数是**相对客群的分位排名**，不是绝对分数——20 单在「中位数 4 单」的客群里是高频客户，在「中位数 40 单」的客群里只是普通客户，所以绝对阈值一旦换数据集就会退化（实测在 4009 个真实用户上，旧公式把 78% 的人塞进同一个客群，且 `New` 恒为 0）。
+
 ```
-recency   = max(0, 1 - 距上次购买天数 / 90)
-frequency = min(1, 购买次数 / 12)
-monetary  = min(1, 累计消费 / 1500)
+RFMScale 从当前用户总体预计算三组排序数组
+recency   = 1 - percentile(recency_days)      # 天越少越好，所以要取反
+frequency = percentile(orders)
+monetary  = percentile(lifetime_value)
 overall   = 0.3·recency + 0.3·frequency + 0.4·monetary
 ```
 
 客群判定（自上而下命中即返回）：
 
-1. `orders ≤ 2` → **New**
-2. `recency_days > 60` → **At Risk**
-3. `orders ≥ 10 且 消费 ≥ 1000 且 recency ≤ 14` → **Champions**
-4. `orders ≥ 5 且 recency ≤ 45` → **Loyal**
+1. `frequency ≤ 0.30` → **New**
+2. `recency ≥ 0.50 且 frequency ≥ 0.66 且 monetary ≥ 0.66` → **Champions**
+3. `frequency ≥ 0.66 且 monetary ≥ 0.50` → **Loyal**
+4. `recency ≤ 0.33` → **At Risk**
 5. 其余 → **Potential**
+
+顺序很重要：正向信号优先于流失判定，否则一个刚沉默不久的高频客户会被判成 At Risk。
 
 ## 11. 多语言（i18n）
 
 - 前端 `src/i18n.ts` 保存全部界面文案词典与类目/标签/客群映射；`i18n-provider.tsx` 提供 `useI18n()` hook
 - 语言优先级：URL `?lang=zh` > `localStorage` > 默认 `en`；切换时写入 `localStorage` 与 `<html lang>`
 - 每个聊天请求携带 `language` 字段：
-  - 调度 / 文案 / 回复 / 通用问答的 system prompt 追加 `language_directive()`
-  - 调度 Agent 额外收到 `CATALOG_LANGUAGE_RULE`：`search.keywords` / `search.category` 必须仍为英文目录词（中文查询由 LLM 翻译）
+  - 调度 / 回复 / 通用问答的 system prompt 追加 `language_directive()`
+  - 调度 Agent 额外收到 `catalog_language_rule()`，它按实际加载类目是否含中文来要求 `search.keywords` / `search.category` 使用对应语言（ShopSimulator 中文目录 vs 内置英文演示目录）
 - 商品型号保留英文，类目、标签、库存状态、A/B 文案等均由前端词典翻译
 
 ## 12. 前端数据流
@@ -179,8 +182,27 @@ useAgentStream(userId)
 
 ## 13. 扩展点
 
-- **新增 Agent**：实现 `BaseAgent` 子类 → 在图中注册节点与边 → 把名字加入计划提示词的 `agents` 枚举
+- **新增 Agent**：实现 `BaseAgent` 子类 → 在图中注册节点与边。如果它需要 LLM，先想清楚能否并入 `supervisor` 或 `recommend`——每多一个 LLM 节点就多一次秒级往返
 - **新增工具**：在 `chat_agent.py` 用 `@tool` 装饰函数并加入 `create_agent` 的 tools 列表
 - **持久化记忆**：把 `build_graph()` 的 checkpointer 换成 `SqliteSaver` / Postgres 实现
-- **真实数据**：替换 `data/products.py` 与 `data/users.py`，或在画像节点接入数据库/特征服务
+- **换数据源**：`ECOM_DATA_SOURCE=auto|real|mock`（见 `data/store.py`）；拉取脚本见 `scripts/fetch_data.py`
 - **可观测性**：设置 `LANGSMITH_TRACING=true` 即获得全链路追踪
+
+## 14. 召回与语义索引
+
+```
+用户查询 ──┬─► 硬过滤（预算 / 类目 / 品牌）→ eligible
+           │
+           ├─► 关键词召回：product_text 子串命中数 × 2 + 评分      → 全量排序
+           ├─► 语义召回：bge-small-zh-v1.5 512 维余弦，掩码在 eligible 内 → top 50
+           │
+           └─► RRF 融合（k=60）→ 出口再校验一次硬过滤 → top 12
+```
+
+**为什么用 RRF 而不是加权求和**：需要给「关键词命中数」和「余弦相似度」标定相对权重，而两者量纲完全无关。RRF 只用名次，天然免标定，且两路都找到的商品会自动上浮。
+
+**为什么掩码而不是先检索再过滤**：先检索的话，一次超预算查询的 top-50 可能全部落在预算外，过滤后就没结果了；掩码保证语义排序只在用户已经认可的集合里挑最相关的。
+
+**索引失效策略**：索引以 `product_id` 为行的连接键。加载时校验 id 集合与当前目录是否一致，不一致就视为不存在（回落关键词召回）。这样换数据集不会静默排错行，代价是必须重跑 `scripts/build_index.py`。
+
+**没有相似度阈值**：实测在真实目录上不可分（应命中 top-1 最低 0.600，应不命中最高 0.602；换成 z 分数同样重叠）。因此「没有合适商品」的判定交给 `recommend` 的结构化输出——返回空 `product_ids` 即为刻意判空，此时 `respond` 不发商品事件也不发库存事件，前端显示「没有符合条件的商品」。注意这与调用失败不同：`_fallback` 的 `success=False` 仍会回落到候选顺序。

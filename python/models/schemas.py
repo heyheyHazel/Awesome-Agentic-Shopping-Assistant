@@ -78,17 +78,6 @@ class SupervisorPlan(BaseModel):
         description="One-sentence acknowledgement shown immediately, e.g. 'Got it! Here are the best running shoes for you.'"
     )
     search: SearchParams = Field(default_factory=SearchParams)
-    agents: list[Literal["profile", "recall", "rerank", "inventory", "copy"]] = Field(
-        default_factory=list,
-        description=(
-            "Pipeline agents to run. For product_search always include recall, rerank, inventory; "
-            "add profile when personalization matters; add copy for marketing text. Empty for general."
-        ),
-    )
-
-
-class ProductRanking(BaseModel):
-    product_ids: list[str] = Field(description="Product IDs ordered from best to worst match")
 
 
 class CopyItem(BaseModel):
@@ -96,8 +85,17 @@ class CopyItem(BaseModel):
     text: str
 
 
-class CopySet(BaseModel):
-    items: list[CopyItem]
+class ProductRanking(BaseModel):
+    """Ranking and pitch lines, produced by a single LLM call.
+
+    Ranking and copywriting take the same inputs and only differ in what they
+    write back, so they share one call and one round trip instead of two.
+    """
+
+    product_ids: list[str] = Field(description="Product IDs ordered from best to worst match")
+    pitches: list[CopyItem] = Field(
+        default_factory=list, description="One short personalised line per recommended product"
+    )
 
 
 # ── Agent results ─────────────────────────────────────────────────────
@@ -123,11 +121,7 @@ class SupervisorResult(AgentResult):
 class ProductRecResult(AgentResult):
     agent_name: str = "rerank"
     products: list[Product] = Field(default_factory=list)
-
-
-class CopyResult(AgentResult):
-    agent_name: str = "copy"
-    items: list[CopyItem] = Field(default_factory=list)
+    pitches: list[CopyItem] = Field(default_factory=list)
 
 
 class InventoryResult(AgentResult):

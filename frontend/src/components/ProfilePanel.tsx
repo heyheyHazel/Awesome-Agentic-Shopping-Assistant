@@ -4,14 +4,6 @@ import { useI18n } from '../i18n'
 import type { ReactNode } from 'react'
 import type { ExperimentInfo, ProfileResponse, UserSummary } from '../types'
 
-const SEGMENT_DOTS: Record<string, string> = {
-  Champions: 'bg-amber-400',
-  Loyal: 'bg-brand',
-  Potential: 'bg-teal-500',
-  'At Risk': 'bg-warning',
-  New: 'bg-slate-400',
-}
-
 const SEGMENT_BADGES: Record<string, string> = {
   Champions: 'bg-amber-50 text-amber-600',
   Loyal: 'bg-brand-soft text-brand',
@@ -34,20 +26,6 @@ function Row({ label, value }: { label: string; value: ReactNode }) {
     <div className="flex items-start justify-between gap-3 border-t border-line/70 pt-2 first:border-0 first:pt-0">
       <span className="shrink-0 text-xs text-muted">{label}</span>
       <span className="max-w-[64%] text-right text-xs font-semibold">{value}</span>
-    </div>
-  )
-}
-
-function RfmRow({ label, tone, active, currentLabel }: { label: string; tone: string; active: boolean; currentLabel: string }) {
-  return (
-    <div
-      className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs ${
-        active ? 'bg-canvas font-semibold ring-1 ring-line' : 'text-muted'
-      }`}
-    >
-      <span className={`h-2 w-2 rounded-full ${tone}`} />
-      {label}
-      {active && <span className="ml-auto text-[10px] font-semibold text-brand">{currentLabel}</span>}
     </div>
   )
 }
@@ -219,21 +197,6 @@ export default function ProfilePanel({
         ) : (
           <p className="mt-3 text-xs text-faint">{t('waiting_backend')}</p>
         )}
-      </div>
-
-      <div className="card p-4">
-        <p className="section-label">{t('rfm_clustering')}</p>
-        <div className="mt-2 space-y-1">
-          {(profile?.segments ?? Object.keys(SEGMENT_DOTS)).map((value) => (
-            <RfmRow
-              key={value}
-              label={segment(value)}
-              tone={SEGMENT_DOTS[value] ?? 'bg-slate-400'}
-              active={person?.segment === value}
-              currentLabel={t('current')}
-            />
-          ))}
-        </div>
       </div>
 
       <AbCard experiment={experiment} />

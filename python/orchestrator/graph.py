@@ -1,10 +1,15 @@
-"""LangGraph pipeline: supervisor routing, parallel agent stages, checkpointed memory.
+"""LangGraph pipeline: supervisor routing, deterministic filtering, one ranking call.
 
 Flow per turn:
-    START → supervisor (LLM plan, dynamic scheduling)
+    START → supervisor (LLM plan: intent + retrieval parameters)
           ├─ general        → assistant (tool-calling agent, streamed)
-          └─ product_search → [profile?, recall] → [rerank ‖ inventory]
-                              → aggregate → [marketing?] → respond (streamed)
+          └─ product_search → profile → recall → inventory → filter
+                              → recommend (LLM: ranking + pitch lines in one call)
+                              → respond (streamed answer, no LLM)
+
+Two LLM round trips per shopping turn. Query understanding and ranking both need
+the model; everything else (recall, stock, filtering, composing the reply) is
+deterministic and costs no latency, so it is not worth a separate call.
 """
 
 from __future__ import annotations
@@ -13,7 +18,7 @@ import time
 from typing import Annotated, Any, TypedDict
 
 import structlog
-from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
+from langchain_core.messages import AIMessage, AnyMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
@@ -22,17 +27,12 @@ from langgraph.graph.message import add_messages
 from agents import (
     ChatAgent,
     InventoryAgent,
-    MarketingCopyAgent,
     ProductRecAgent,
     SupervisorAgent,
     UserProfileAgent,
 )
-from agents.models import build_llm
-from agents.language import language_directive
 from agents.product_rec_agent import recall_products
-from agents.structured import text_of
 from config import get_settings
-from config.currency import currency_symbol
 from models.schemas import CopyItem, InventoryItem, Product, SearchParams, UserProfile
 from services.ab_test import ABTestEngine
 
@@ -44,19 +44,12 @@ supervisor_agent = SupervisorAgent()
 profile_agent = UserProfileAgent()
 rec_agent = ProductRecAgent()
 inventory_agent = InventoryAgent()
-copy_agent = MarketingCopyAgent()
 chat_agent = ChatAgent()
 ab_engine = ABTestEngine()
 
-reply_llm = build_llm(temperature=0.7, max_tokens=512)
-
-REPLY_SYSTEM = """You are a helpful shopping assistant closing a recommendation turn.
-Summarise the picks in 2-3 warm, concrete sentences: name the top product, why it fits
-(price, rating, tags), and one alternative. Mention stock only if something is low."""
-
-
-def merge_dicts(left: dict | None, right: dict | None) -> dict:
-    return {**(left or {}), **(right or {})}
+# The reply is assembled from the pitch lines the ranking call already wrote, so
+# it costs no extra round trip. Chunked so the UI keeps its streaming feel.
+TOKEN_CHUNK = 6
 
 
 class GraphState(TypedDict, total=False):
@@ -67,13 +60,16 @@ class GraphState(TypedDict, total=False):
     plan: dict[str, Any]
     profile: UserProfile | None
     candidates: list[Product]
-    ranked: list[Product]
     inventory: list[InventoryItem]
     available_ids: list[str]
-    copies: list[CopyItem]
     final_products: list[Product]
+    pitches: list[CopyItem]
     reply: str
     timings: Annotated[dict[str, float], merge_dicts]
+
+
+def merge_dicts(left: dict | None, right: dict | None) -> dict:
+    return {**(left or {}), **(right or {})}
 
 
 # ── streaming helpers ─────────────────────────────────────────────────
@@ -96,6 +92,10 @@ def elapsed_ms(start: float) -> float:
     return round((time.perf_counter() - start) * 1000, 1)
 
 
+def _chunks(text: str) -> list[str]:
+    return [text[index:index + TOKEN_CHUNK] for index in range(0, len(text), TOKEN_CHUNK)]
+
+
 # ── nodes ─────────────────────────────────────────────────────────────
 
 async def supervisor_node(state: GraphState) -> dict:
@@ -116,7 +116,6 @@ async def supervisor_node(state: GraphState) -> dict:
         "intent": plan.intent,
         "reply": plan.reply,
         "search": plan.search.model_dump(),
-        "agents": plan.agents,
         "variant": variant,
     })
     emit({"type": "experiment", **ab_engine.info(state["user_id"]).model_dump()})
@@ -125,11 +124,10 @@ async def supervisor_node(state: GraphState) -> dict:
         "plan": plan.model_dump(),
         "profile": None,
         "candidates": [],
-        "ranked": [],
         "inventory": [],
         "available_ids": [],
-        "copies": [],
         "final_products": [],
+        "pitches": [],
         "reply": "",
         "timings": {"supervisor": elapsed_ms(start)},
     }
@@ -156,7 +154,7 @@ async def assistant_node(state: GraphState) -> dict:
 
 
 async def profile_node(state: GraphState) -> dict:
-    """Build the shopper profile (RFM scores + segment)."""
+    """Build the shopper profile (percentile RFM scores + segment)."""
     start = time.perf_counter()
     agent_event("profile", "running")
 
@@ -175,23 +173,11 @@ async def recall_node(state: GraphState) -> dict:
     agent_event("recommendation", "running", "Searching the catalog…")
 
     search = SearchParams(**(state.get("plan") or {}).get("search", {}))
-    candidates = recall_products(search, limit=settings.max_candidates)
+    candidates = recall_products(
+        search, query=state.get("query", ""), limit=settings.max_candidates
+    )
 
     return {"candidates": candidates, "timings": {"recall": elapsed_ms(start)}}
-
-
-async def rerank_node(state: GraphState) -> dict:
-    """Re-order the candidates with the LLM for this shopper and query."""
-    start = time.perf_counter()
-    result = await rec_agent.run(
-        profile=state.get("profile"),
-        products=state.get("candidates", []),
-        query=state.get("query", ""),
-        k=settings.max_products,
-    )
-    agent_event("recommendation", "done", f"Top {len(result.products)} picks ready")
-
-    return {"ranked": result.products, "timings": {"rerank": elapsed_ms(start)}}
 
 
 async def inventory_node(state: GraphState) -> dict:
@@ -207,113 +193,98 @@ async def inventory_node(state: GraphState) -> dict:
     }
 
 
-async def aggregate_node(state: GraphState) -> dict:
-    """Filter the ranking by availability and publish the final product list."""
+async def filter_node(state: GraphState) -> dict:
+    """Drop anything out of stock before the model spends a call ranking it."""
     start = time.perf_counter()
-    ranked = state.get("ranked") or state.get("candidates", [])
     available = set(state.get("available_ids") or [])
-
-    final = [p for p in ranked if not available or p.product_id in available]
-    if not final:
-        final = ranked
-    final = final[: settings.max_products]
-
-    emit({"type": "products", "products": [p.model_dump() for p in final]})
-    return {"final_products": final, "timings": {"aggregate": elapsed_ms(start)}}
+    candidates = state.get("candidates", [])
+    shortlist = [p for p in candidates if p.product_id in available] if available else candidates
+    return {"candidates": shortlist, "timings": {"filter": elapsed_ms(start)}}
 
 
-async def marketing_node(state: GraphState) -> dict:
-    """Generate segment-specific copy for the final products."""
+async def recommend_node(state: GraphState) -> dict:
+    """One LLM call: rank the shortlist and write a pitch line for each pick."""
     start = time.perf_counter()
-    agent_event("copywriting", "running")
+    agent_event("recommendation", "running", "Ranking the best matches…")
 
-    result = await copy_agent.run(
+    result = await rec_agent.run(
         profile=state.get("profile"),
-        products=state.get("final_products", []),
+        products=state.get("candidates", []),
+        query=state.get("query", ""),
         language=state.get("language", "en"),
+        k=settings.max_products,
     )
-    profile = state.get("profile")
-    emit({
-        "type": "marketing",
-        "items": [item.model_dump() for item in result.items],
-        "segment": profile.segment if profile else "New",
-    })
-    agent_event("copywriting", "done", f"{len(result.items)} lines")
+    agent_event("recommendation", "done", f"Top {len(result.products)} picks ready")
 
-    return {"copies": result.items, "timings": {"marketing": elapsed_ms(start)}}
+    # A deliberate empty ranking means "none of these fit the request"; only a
+    # failed call falls back to the shortlist order, so degradation still works.
+    final = (
+        result.products
+        if result.success
+        else state.get("candidates", [])[: settings.max_products]
+    )
+    return {
+        "final_products": final,
+        "pitches": result.pitches,
+        "timings": {"recommend": elapsed_ms(start)},
+    }
 
 
 async def respond_node(state: GraphState) -> dict:
-    """Publish stock status, then stream the closing reply for shopping turns."""
+    """Publish products and stock status, then stream the pitch lines as the answer."""
     start = time.perf_counter()
-    agent_event("supervisor", "running", "Writing the summary…")
+    final = state.get("final_products", [])
+    emit({"type": "products", "products": [p.model_dump() for p in final]})
 
-    final_ids = {p.product_id for p in state.get("final_products", [])}
+    final_ids = {p.product_id for p in final}
     stock = [item for item in state.get("inventory", []) if item.product_id in final_ids]
-    out_of_stock = [item.name for item in stock if item.status == "out_of_stock"]
-    low_stock = [item.name for item in stock if item.status == "low_stock"]
-    if out_of_stock:
-        summary = f"Not available right now: {', '.join(out_of_stock)}."
-    elif low_stock:
-        summary = f"Low stock on {', '.join(low_stock)} — they may sell out soon."
-    else:
-        summary = "All items are in stock and ready to ship."
-    emit({
-        "type": "inventory",
-        "items": [item.model_dump() for item in stock],
-        "summary": summary,
-    })
+    if stock:
+        out_of_stock = [item.name for item in stock if item.status == "out_of_stock"]
+        low_stock = [item.name for item in stock if item.status == "low_stock"]
+        if out_of_stock:
+            summary = f"Not available right now: {', '.join(out_of_stock)}."
+        elif low_stock:
+            summary = f"Low stock on {', '.join(low_stock)} — they may sell out soon."
+        else:
+            summary = "All items are in stock and ready to ship."
+        emit({
+            "type": "inventory",
+            "items": [item.model_dump() for item in stock],
+            "summary": summary,
+        })
 
-    profile = state.get("profile")
-    symbol = currency_symbol()
-    products = "\n".join(
-        f"- {p.name} ({symbol}{p.price:.2f}, {p.rating}★, {', '.join(p.tags)})"
-        for p in state.get("final_products", [])
-    )
-    copies = "\n".join(f"- {c.text}" for c in state.get("copies", []))
-    prompt = (
-        f"Shopper: {profile.name if profile else 'guest'} "
-        f"({profile.segment if profile else 'unknown segment'}).\n"
-        f"Request: {state.get('query', '')}\n"
-        f"Recommended products:\n{products or 'none'}\n"
-        f"Marketing lines already shown to the user:\n{copies or 'none'}"
-    )
+    text = "\n".join(pitch.text.strip() for pitch in state.get("pitches", []) if pitch.text.strip())
+    if text:
+        agent_event("copywriting", "running")
+        for chunk in _chunks(text):
+            emit({"type": "token", "content": chunk})
+        agent_event("copywriting", "done")
 
-    text = ""
-    async for chunk in reply_llm.astream([
-        ("system", f"{REPLY_SYSTEM}\n{language_directive(state.get('language', 'en'))}"),
-        ("user", prompt),
-    ]):
-        token = text_of(chunk.content)
-        if token:
-            text += token
-            emit({"type": "token", "content": token})
-
-    agent_event("supervisor", "done")
     return {
         "reply": text,
-        "messages": [AIMessage(content=text)],
+        "messages": [AIMessage(content=text)] if text else [],
         "timings": {"respond": elapsed_ms(start)},
     }
 
 
 # ── routing ───────────────────────────────────────────────────────────
 
-def route_supervisor(state: GraphState) -> str | list[str]:
-    """Dynamic scheduling: general chat, or the agent fan-out from the plan."""
+def route_supervisor(state: GraphState) -> str:
+    """General questions go to the tool-calling agent; shopping turns run the pipeline.
+
+    The deterministic stages (profile, recall, inventory, filter) are chained as a
+    straight line rather than fanned out. Each costs well under a millisecond while
+    an LLM call costs seconds, so parallelising them buys nothing — and a node with
+    two incoming edges from different supersteps runs once per superstep, which
+    would execute the ranking call twice.
+    """
     plan = state.get("plan") or {}
-    if plan.get("intent") != "product_search":
-        return "assistant"
-    targets = ["recall"]
-    if "profile" in plan.get("agents", []):
-        targets.append("profile")
-    return targets
+    return "assistant" if plan.get("intent") != "product_search" else "profile"
 
 
-def route_aggregate(state: GraphState) -> str:
-    """Run the copy agent only when the plan asked for it."""
-    plan = state.get("plan") or {}
-    return "marketing" if "copy" in plan.get("agents", []) else "respond"
+def route_filter(state: GraphState) -> str:
+    """Skip the ranking call entirely when nothing survived the constraints."""
+    return "recommend" if state.get("candidates") else "respond"
 
 
 def build_graph(checkpointer: Any = None):
@@ -323,24 +294,20 @@ def build_graph(checkpointer: Any = None):
     graph.add_node("assistant", assistant_node)
     graph.add_node("profile", profile_node)
     graph.add_node("recall", recall_node)
-    graph.add_node("rerank", rerank_node)
     graph.add_node("inventory", inventory_node)
-    graph.add_node("aggregate", aggregate_node)
-    graph.add_node("marketing", marketing_node)
+    graph.add_node("filter", filter_node)
+    graph.add_node("recommend", recommend_node)
     graph.add_node("respond", respond_node)
 
     graph.add_edge(START, "supervisor")
-    graph.add_conditional_edges("supervisor", route_supervisor, ["assistant", "profile", "recall"])
+    graph.add_conditional_edges("supervisor", route_supervisor, ["assistant", "profile"])
     graph.add_edge("assistant", END)
 
-    for stage in ("profile", "recall"):
-        graph.add_edge(stage, "rerank")
-        graph.add_edge(stage, "inventory")
-    graph.add_edge("rerank", "aggregate")
-    graph.add_edge("inventory", "aggregate")
-
-    graph.add_conditional_edges("aggregate", route_aggregate, ["marketing", "respond"])
-    graph.add_edge("marketing", "respond")
+    graph.add_edge("profile", "recall")
+    graph.add_edge("recall", "inventory")
+    graph.add_edge("inventory", "filter")
+    graph.add_conditional_edges("filter", route_filter, ["recommend", "respond"])
+    graph.add_edge("recommend", "respond")
     graph.add_edge("respond", END)
 
     return graph.compile(checkpointer=checkpointer or InMemorySaver())

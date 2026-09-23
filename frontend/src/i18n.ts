@@ -34,6 +34,7 @@ export const STRINGS = {
     badge_best: 'Best Match',
     badge_rated: 'High Rated',
     badge_value: 'Great Value',
+    no_matches: 'Nothing matched that request — try a wider budget or another category.',
     // inventory
     stock_in: 'In Stock ({n})',
     stock_low: 'Low Stock ({n})',
@@ -54,8 +55,6 @@ export const STRINGS = {
     row_budget: 'Budget',
     recency_value: '{n} days ago',
     frequency_value: '{n} orders',
-    rfm_clustering: 'RFM Clustering',
-    current: 'current',
     ab_title: 'A/B Testing · Thompson Sampling',
     ab_conversion: 'Conversion Rate',
     ab_bucket: 'your bucket',
@@ -103,6 +102,7 @@ export const STRINGS = {
     badge_best: '最佳匹配',
     badge_rated: '高分好评',
     badge_value: '超值之选',
+    no_matches: '没有符合条件的商品——可以试着放宽预算或换个类目。',
     // inventory
     stock_in: '有货（{n}）',
     stock_low: '库存紧张（{n}）',
@@ -123,8 +123,6 @@ export const STRINGS = {
     row_budget: '预算区间',
     recency_value: '{n} 天前',
     frequency_value: '{n} 单',
-    rfm_clustering: 'RFM 客群聚类',
-    current: '当前',
     ab_title: 'A/B 测试 · Thompson Sampling',
     ab_conversion: '转化率',
     ab_bucket: '你的分组',

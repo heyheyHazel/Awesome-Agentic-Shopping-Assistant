@@ -71,6 +71,10 @@ export default function ProductCards({
   const { t, category, tag } = useI18n()
   const badges = computeBadges(products)
 
+  if (products.length === 0) {
+    return <p className="pt-1 text-xs text-muted">{t('no_matches')}</p>
+  }
+
   return (
     <div className="grid grid-cols-1 gap-3 pt-1 sm:grid-cols-2 xl:grid-cols-3">
       {products.map((product) => {

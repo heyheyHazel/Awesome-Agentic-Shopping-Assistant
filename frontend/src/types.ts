@@ -44,11 +44,6 @@ export interface InventoryItem {
   purchase_limit: number | null
 }
 
-export interface CopyItem {
-  product_id: string
-  text: string
-}
-
 export interface VariantStats {
   name: string
   label: string
@@ -88,13 +83,7 @@ export interface AgentEvent {
 export interface PlanEvent {
   intent: 'product_search' | 'general'
   reply: string
-  agents: string[]
   variant: string
-}
-
-export interface MarketingEvent {
-  items: CopyItem[]
-  segment: string
 }
 
 export interface InventoryEvent {
