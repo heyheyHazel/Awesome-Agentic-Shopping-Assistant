@@ -71,6 +71,12 @@ export interface UserSummary {
   tier: string
 }
 
+export interface MetaInfo {
+  data_source: string
+  currency: string
+  currency_symbol: string
+}
+
 // ── SSE payloads ──────────────────────────────────────────────────────
 
 export interface AgentEvent {

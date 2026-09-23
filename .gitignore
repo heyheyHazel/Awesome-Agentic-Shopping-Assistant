@@ -19,6 +19,11 @@ node_modules/
 *.db
 *.sqlite3
 
+# Downloaded ShopSimulator dataset (no upstream license — fetch with
+# `python scripts/fetch_data.py` instead of committing it)
+python/data/raw/
+python/data/generated/
+
 # OS
 .DS_Store
 Thumbs.db
@@ -37,3 +42,4 @@ docker-compose.override.yml
 
 # Local design reference (do not publish)
 image.png
+demo.png

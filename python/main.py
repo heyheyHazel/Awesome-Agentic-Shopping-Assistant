@@ -18,7 +18,8 @@ from langchain_core.messages import HumanMessage
 from agents import UserProfileAgent
 from agents.user_profile_agent import SEGMENTS
 from config import get_settings
-from data.users import USERS
+from config.currency import currency_code, currency_symbol
+from data import SOURCE, USERS
 from models.schemas import (
     ChatRequest,
     ExperimentInfo,
@@ -65,6 +66,16 @@ def _sse(event: str, data: dict) -> str:
 @app.get("/health")
 async def health() -> dict:
     return {"status": "healthy", "model": settings.llm_model}
+
+
+@app.get("/api/v1/meta")
+async def meta() -> dict:
+    """Active catalog source and currency, used by the UI for price formatting."""
+    return {
+        "data_source": SOURCE,
+        "currency": currency_code(),
+        "currency_symbol": currency_symbol(),
+    }
 
 
 @app.get("/api/v1/users", response_model=list[UserSummary])

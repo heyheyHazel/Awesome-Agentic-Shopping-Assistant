@@ -1,4 +1,4 @@
-import type { ExperimentInfo, ProfileResponse, UserSummary } from './types'
+import type { ExperimentInfo, MetaInfo, ProfileResponse, UserSummary } from './types'
 
 export type ChatLanguage = 'en' | 'zh'
 
@@ -12,6 +12,10 @@ async function getJson<T>(url: string): Promise<T> {
 
 export function fetchUsers(): Promise<UserSummary[]> {
   return getJson<UserSummary[]>('/api/v1/users')
+}
+
+export function fetchMeta(): Promise<MetaInfo> {
+  return getJson<MetaInfo>('/api/v1/meta')
 }
 
 export function fetchProfile(userId: string): Promise<ProfileResponse> {

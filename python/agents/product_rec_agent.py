@@ -7,7 +7,8 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from config import get_settings
-from data.products import PRODUCTS
+from config.currency import currency_symbol
+from data import PRODUCTS
 from models.schemas import (
     Product,
     ProductRanking,
@@ -82,10 +83,11 @@ class ProductRecAgent(BaseAgent):
 
         profile_line = "No shopper profile available."
         if profile:
+            symbol = currency_symbol()
             profile_line = (
                 f"Segment: {profile.segment} (RFM {profile.rfm.overall}). "
                 f"Preferred categories: {', '.join(profile.preferred_categories) or 'unknown'}. "
-                f"Budget: ${profile.price_range[0]:.0f}-${profile.price_range[1]:.0f}."
+                f"Budget: {symbol}{profile.price_range[0]:.0f}-{symbol}{profile.price_range[1]:.0f}."
             )
 
         candidates = [

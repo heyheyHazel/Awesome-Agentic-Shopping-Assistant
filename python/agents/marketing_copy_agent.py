@@ -7,6 +7,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from config import get_settings
+from config.currency import currency_symbol
 from models.schemas import CopyResult, CopySet, Product, UserProfile
 
 from .base_agent import BaseAgent
@@ -46,8 +47,9 @@ class MarketingCopyAgent(BaseAgent):
 
         segment = profile.segment if profile else "New"
         style = SEGMENT_STYLES.get(segment, SEGMENT_STYLES["New"])
+        symbol = currency_symbol()
         product_lines = "\n".join(
-            f"- {p.product_id}: {p.name} | {p.category} | ${p.price:.2f} | {p.rating} stars ({p.rating_count} reviews) | tags: {', '.join(p.tags)}"
+            f"- {p.product_id}: {p.name} | {p.category} | {symbol}{p.price:.2f} | {p.rating} stars ({p.rating_count} reviews) | tags: {', '.join(p.tags)}"
             for p in products
         )
 

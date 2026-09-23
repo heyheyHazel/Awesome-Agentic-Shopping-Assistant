@@ -12,6 +12,7 @@
 - **跨服务商的结构化输出**：`JsonStructured`（JSON 模式 + schema 注入），同时兼容 OpenAI 与 DeepSeek thinking 模型
 - **稳健性**：每个 Agent 独立超时熔断、指数退避重试、失败降级（重排挂了就按召回顺序继续）
 - **A/B 测试**：一致性哈希分桶 + Thompson Sampling 动态调权
+- **中英双语**：右上角一键切换，界面文案、商品类目/标签、LLM 回复语言同步切换；支持 `?lang=zh` 链接直达
 
 ## 界面布局
 
@@ -77,6 +78,10 @@ pip install -r requirements-dev.txt   # 含 pytest
 
 cp .env.example .env
 # 编辑 .env，填入 API Key / 服务地址 / 模型名
+
+# 拉取 ShopSimulator 真实商品与用户画像（约 27 MB，未执行则自动回落内置演示数据）
+python scripts/fetch_data.py
+
 python main.py                        # http://localhost:8000
 ```
 
@@ -91,11 +96,11 @@ npm install
 npm run dev                           # http://localhost:5173
 ```
 
-浏览器打开 http://localhost:5173 ，试试输入 `I want running shoes for daily training under $120.`
+浏览器打开 http://localhost:5173 ，试试输入 `推荐一款 300 元以内的保湿护肤品`。
 
 ### 3. 测试
 
-15 个单元测试与集成测试全部使用桩 LLM，不需要 API Key：
+16 个单元测试与集成测试全部使用桩 LLM，不需要 API Key（固定跑内置演示数据）：
 
 ```bash
 cd python
@@ -114,7 +119,7 @@ docker compose up -d                  # API: http://localhost:8000
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/health` | 健康检查 |
-| POST | `/api/v1/chat` | 聊天入口，SSE 事件流 |
+| POST | `/api/v1/chat` | 聊天入口，SSE 事件流（`language`: `en` \| `zh`） |
 | POST | `/api/v1/recommend` | 非流式推荐（Swagger / API 客户端） |
 | GET | `/api/v1/users` | 演示用户列表 |
 | GET | `/api/v1/users/{user_id}/profile` | 用户画像 + RFM |
@@ -149,6 +154,8 @@ docker compose up -d                  # API: http://localhost:8000
 | `ECOM_LLM_DISABLE_THINKING` | `false` | DeepSeek thinking 模型建议开启 |
 | `ECOM_MAX_PRODUCTS` | `3` | 聚合后展示的商品数 |
 | `ECOM_MAX_CANDIDATES` | `12` | 召回候选上限 |
+| `ECOM_DATA_SOURCE` | `auto` | `auto` / `real` / `mock`，见下方「数据来源」 |
+| `ECOM_CURRENCY` | `CNY` | 目录货币（ISO 代码），同时驱动界面价格符号与提示词 |
 
 可选接入 LangSmith 追踪：设置 `LANGSMITH_TRACING=true` 与 `LANGSMITH_API_KEY`。
 
@@ -184,14 +191,46 @@ docker compose up -d                  # API: http://localhost:8000
 └── docker-compose.yml
 ```
 
-## 演示数据
+## 数据来源
 
-- `data/users.py`：4 位演示用户（VIP Champions / New / Loyal / At Risk），前端可切换，画像与推荐随之变化
-- `data/products.py`：32 件商品（14 个类目，USD 价格含评分与库存），美妆/服饰/数码/食品等
-- A/B 面板预置 499 / 498 次实验样本（A 62.7% vs B 74.3%），可直接观察 Thompson Sampling 的获胜方
+### 真实数据（推荐）
+
+```bash
+cd python
+python scripts/fetch_data.py                 # HF 镜像，两个 persona 分片
+python scripts/fetch_data.py --source cdn    # 备用源：jsDelivr 上的单个 gz 文件
+```
+
+自 [ShopSimulator](https://github.com/ShopAgent-Team/ShopSimulator)（arXiv 2601.18225）转换而来：
+
+- **商品**：真实中文电商商品（标题、三级类目、店铺、CNY 价格、属性标签、SKU、图片 URL），9 个一级类目
+- **用户**：每条商品自带 `user_persona`，含会员等级、近 90 天订单数、近 30 天消费额、复购率、类目/品牌偏好、价格区间、14 天搜索词与收藏加购记录
+
+上游数据集**没有 license**，因此数据不入库：`python/data/raw/` 与 `python/data/generated/` 已在 `.gitignore` 中，clone 后需自行执行脚本。
+
+商品缺少评分、评价数与库存，这三项由 asin 的确定性哈希**合成**（保证同商品永远同值），代码中标注为 SYNTHETIC；`recency_days` 同样由复购率推导，因数据集不含「距上次购买天数」。
+
+### 内置演示数据（回落）
+
+未执行下载脚本时自动使用，保证仓库 clone 后可立即运行：
+
+- `data/users.py`：4 位演示用户（Champions / New / Loyal / At Risk 四个客群）
+- `data/products.py`：32 件商品（14 个类目，CNY 价格，含评分与库存）
+
+`ECOM_DATA_SOURCE` 控制选择：`auto`（默认，有真实数据则用真实数据）／`real`（缺失时启动即报错）／`mock`（强制内置，测试使用）。
+
+调库与选数逻辑集中在 `data/store.py`，其余代码只依赖 `from data import PRODUCTS, USERS, get_user`。
+
+A/B 面板预置 499 / 498 次实验样本（A 62.7% vs B 74.3%），可直接观察 Thompson Sampling 的获胜方。
+
+## 许可与数据
+
+- **代码**：[MIT License](LICENSE) —— `Copyright (c) 2026 heyheyHazel`
+- **数据**：本仓库**不包含**也不重新分发 ShopSimulator 数据集（含 `data/raw/`、`data/generated/`，均已 gitignore），仅提供下载转换脚本；运行时下载的数据遵循上游条款，不在 MIT 授权范围内
 
 ## 设计说明
 
 - **结构化输出**：部分服务商（如 DeepSeek thinking 模型）不支持强制 `tool_choice` 或不支持 `json_schema` 响应格式，因此 `JsonStructured` 采用 JSON 模式 + 在 prompt 中注入 JSON Schema 的方式，兼容性最好
 - **前端流式**：未使用第三方聊天 SDK，而是自定义强类型 SSE Hook——事件包含 Agent 状态、画像、A/B 等业务数据，直连自定义协议比适配通用 SDK 更简单可靠
 - **降级优先**：任何 LLM 环节失败都不会中断整轮对话，重排失败按召回顺序返回，文案失败则跳过该气泡
+- **多语言**：前端负责全部界面文案（词典 + 类目/标签/客群映射），后端只根据请求中的 `language` 字段给各 LLM 输出注入语言指令；检索词语言由实际加载的商品目录决定（`catalog_language_rule` 依据类目是否含中文判断），调度 Agent 在需要时做翻译

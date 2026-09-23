@@ -12,12 +12,12 @@ from models.schemas import (
 from orchestrator import graph as graph_module
 from orchestrator.graph import build_graph
 
-USER_MESSAGE = "I'm looking for running shoes for daily training under $120."
+USER_MESSAGE = "I'm looking for running shoes for daily training under ¥800."
 
 FULL_PLAN = SupervisorPlan(
     intent="product_search",
-    reply="Got it! Looking for running shoes under $120.",
-    search=SearchParams(keywords=["running shoes"], max_price=120),
+    reply="Got it! Looking for running shoes under ¥800.",
+    search=SearchParams(keywords=["running shoes"], max_price=800),
     agents=["profile", "recall", "rerank", "inventory", "copy"],
 )
 
@@ -167,5 +167,5 @@ async def test_checkpointer_keeps_conversation_history(monkeypatch):
     )
 
     history = [m.content for m in second["messages"]]
-    assert any("under $120" in str(c) for c in history)
+    assert any("under ¥800" in str(c) for c in history)
     assert len(second["messages"]) == 4

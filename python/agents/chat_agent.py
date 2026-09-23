@@ -10,8 +10,8 @@ from langchain_core.messages import SystemMessage
 from langchain_core.tools import tool
 
 from agents.user_profile_agent import classify, compute_rfm
-from data.products import PRODUCTS
-from data.users import get_user
+from config.currency import currency_symbol
+from data import PRODUCTS, get_user
 
 from .language import language_directive
 from .models import build_llm
@@ -27,9 +27,10 @@ def search_catalog(query: str, max_price: float | None = None) -> str:
 
     Args:
         query: Lowercase keywords, e.g. "running shoes" or "skincare".
-        max_price: Optional maximum price in USD.
+        max_price: Optional maximum price in CNY.
     """
     terms = [term for term in query.lower().split() if term]
+    symbol = currency_symbol()
     matches: list[str] = []
     for product in PRODUCTS:
         if max_price is not None and product.price > max_price:
@@ -38,7 +39,7 @@ def search_catalog(query: str, max_price: float | None = None) -> str:
         if terms and not any(term in haystack for term in terms):
             continue
         matches.append(
-            f"{product.product_id} | {product.name} | {product.category} | ${product.price:.2f} "
+            f"{product.product_id} | {product.name} | {product.category} | {symbol}{product.price:.2f} "
             f"| {product.rating} stars ({product.rating_count}) | stock {product.stock}"
         )
     return "\n".join(matches[:6]) if matches else "No matching products found."
@@ -53,11 +54,12 @@ def get_shopper_profile(user_id: str) -> str:
     """
     user = get_user(user_id)
     rfm = compute_rfm(user)
+    symbol = currency_symbol()
     return (
         f"{user.name} ({user.tier}), segment {classify(user)}, {rfm.orders} orders, "
-        f"last purchase {rfm.recency_days} days ago, lifetime value ${rfm.lifetime_value:.2f}, "
+        f"last purchase {rfm.recency_days} days ago, lifetime value {symbol}{rfm.lifetime_value:.2f}, "
         f"prefers {', '.join(user.preferred_categories) or 'unknown'}, "
-        f"budget ${user.price_range[0]:.0f}-${user.price_range[1]:.0f}"
+        f"budget {symbol}{user.price_range[0]:.0f}-{symbol}{user.price_range[1]:.0f}"
     )
 
 

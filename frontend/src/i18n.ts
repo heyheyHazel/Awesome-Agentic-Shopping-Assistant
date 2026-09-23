@@ -25,9 +25,9 @@ export const STRINGS = {
     new_chat: 'New chat',
     empty_title: 'Ask me anything about products',
     empty_desc: 'Five specialised agents will plan, recall, rank, check stock and write copy for you.',
-    suggest_1: 'I want running shoes for daily training under $120.',
+    suggest_1: 'Recommend a skincare routine under ¥400.',
     suggest_2: 'A gift for a friend who loves coffee.',
-    suggest_3: 'What skincare products would you recommend?',
+    suggest_3: 'What home goods would you recommend?',
     input_placeholder: 'Ask me anything about products...',
     send: 'Send',
     // product cards
@@ -94,9 +94,9 @@ export const STRINGS = {
     new_chat: '新对话',
     empty_title: '问我任何商品问题',
     empty_desc: '五个专业 Agent 会为你完成规划、召回、精排、库存校验与文案撰写。',
-    suggest_1: '我想要一双 120 美元以内的日常训练跑鞋。',
+    suggest_1: '推荐一套 400 元以内的护肤品。',
     suggest_2: '送朋友的礼物，对方喜欢咖啡。',
-    suggest_3: '有什么护肤品推荐吗？',
+    suggest_3: '有什么家居好物推荐吗？',
     input_placeholder: '输入你想买的东西…',
     send: '发送',
     // product cards
@@ -160,6 +160,23 @@ export const CATEGORY_LABELS: Record<string, string> = {
   Accessories: '配饰',
   Gaming: '游戏',
   Food: '食品',
+}
+
+/**
+ * The downloaded ShopSimulator catalog stores categories in Chinese while the
+ * built-in demo catalog uses the English keys above, so the English UI needs
+ * the reverse direction too.
+ */
+export const CATEGORY_EN: Record<string, string> = {
+  家居家装: 'Home & Living',
+  美妆个护健康: 'Beauty & Care',
+  生产材料农用品: 'Supplies',
+  休闲娱乐文教: 'Leisure',
+  服饰鞋包饰品: 'Clothing & Accessories',
+  家用电器数码: 'Electronics',
+  食品饮品: 'Food & Drink',
+  运动户外交通: 'Sports & Outdoors',
+  母婴儿童: 'Kids & Baby',
 }
 
 export const TAG_LABELS: Record<string, string> = {
@@ -270,7 +287,8 @@ export function buildI18n(lang: Lang, setLang: (lang: Lang) => void): I18n {
     setLang,
     t: (key) => pick(key),
     fill: (key, vars) => fillTemplate(pick(key), vars),
-    category: (value) => (lang === 'zh' ? (CATEGORY_LABELS[value] ?? value) : value),
+    category: (value) =>
+      lang === 'zh' ? (CATEGORY_LABELS[value] ?? value) : (CATEGORY_EN[value] ?? value),
     tag: (value) => (lang === 'zh' ? (TAG_LABELS[value] ?? value) : value),
     segment: (value) => (lang === 'zh' ? (SEGMENT_LABELS[value] ?? value) : value),
   }

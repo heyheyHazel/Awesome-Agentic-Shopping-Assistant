@@ -155,7 +155,16 @@ overall   = 0.3·recency + 0.3·frequency + 0.4·monetary
 4. `orders ≥ 5 且 recency ≤ 45` → **Loyal**
 5. 其余 → **Potential**
 
-## 11. 前端数据流
+## 11. 多语言（i18n）
+
+- 前端 `src/i18n.ts` 保存全部界面文案词典与类目/标签/客群映射；`i18n-provider.tsx` 提供 `useI18n()` hook
+- 语言优先级：URL `?lang=zh` > `localStorage` > 默认 `en`；切换时写入 `localStorage` 与 `<html lang>`
+- 每个聊天请求携带 `language` 字段：
+  - 调度 / 文案 / 回复 / 通用问答的 system prompt 追加 `language_directive()`
+  - 调度 Agent 额外收到 `CATALOG_LANGUAGE_RULE`：`search.keywords` / `search.category` 必须仍为英文目录词（中文查询由 LLM 翻译）
+- 商品型号保留英文，类目、标签、库存状态、A/B 文案等均由前端词典翻译
+
+## 12. 前端数据流
 
 ```
 useAgentStream(userId)
@@ -168,7 +177,7 @@ useAgentStream(userId)
 
 用户切换时重新拉取画像与实验数据并重置会话；所有流式写入都在单个 `send()` 的事件回调中完成。
 
-## 12. 扩展点
+## 13. 扩展点
 
 - **新增 Agent**：实现 `BaseAgent` 子类 → 在图中注册节点与边 → 把名字加入计划提示词的 `agents` 枚举
 - **新增工具**：在 `chat_agent.py` 用 `@tool` 装饰函数并加入 `create_agent` 的 tools 列表

@@ -32,6 +32,7 @@ from agents.language import language_directive
 from agents.product_rec_agent import recall_products
 from agents.structured import text_of
 from config import get_settings
+from config.currency import currency_symbol
 from models.schemas import CopyItem, InventoryItem, Product, SearchParams, UserProfile
 from services.ab_test import ABTestEngine
 
@@ -264,8 +265,9 @@ async def respond_node(state: GraphState) -> dict:
     })
 
     profile = state.get("profile")
+    symbol = currency_symbol()
     products = "\n".join(
-        f"- {p.name} (${p.price:.2f}, {p.rating}★, {', '.join(p.tags)})"
+        f"- {p.name} ({symbol}{p.price:.2f}, {p.rating}★, {', '.join(p.tags)})"
         for p in state.get("final_products", [])
     )
     copies = "\n".join(f"- {c.text}" for c in state.get("copies", []))

@@ -74,11 +74,13 @@ export default function ChatPanel({
   isStreaming,
   onSend,
   onNewChat,
+  formatPrice,
 }: {
   feed: FeedItem[]
   isStreaming: boolean
   onSend: (text: string) => void
   onNewChat: () => void
+  formatPrice: (amount: number) => string
 }) {
   const { t } = useI18n()
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -125,7 +127,7 @@ export default function ChatPanel({
                   />
                 )
               case 'products':
-                return <ProductCards key={item.id} products={item.products} />
+                return <ProductCards key={item.id} products={item.products} formatPrice={formatPrice} />
               case 'inventory':
                 return <InventoryMessage key={item.id} items={item.items} time={item.time} />
             }

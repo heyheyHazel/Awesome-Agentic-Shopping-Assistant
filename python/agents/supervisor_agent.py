@@ -7,11 +7,12 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from config import get_settings
-from data.products import PRODUCTS
+from config.currency import currency_symbol
+from data import PRODUCTS
 from models.schemas import SupervisorPlan, SupervisorResult, UserProfile
 
 from .base_agent import BaseAgent
-from .language import CATALOG_LANGUAGE_RULE, language_directive
+from .language import catalog_language_rule, language_directive
 from .models import build_llm
 from .structured import JsonStructured
 
@@ -52,15 +53,16 @@ class SupervisorAgent(BaseAgent):
         """Ask the LLM for the plan of this turn."""
         context = ""
         if profile:
+            symbol = currency_symbol()
             context = (
                 f"\nShopper: {profile.name}, segment {profile.segment}, "
                 f"prefers {', '.join(profile.preferred_categories)}, "
-                f"budget ${profile.price_range[0]:.0f}-${profile.price_range[1]:.0f}."
+                f"budget {symbol}{profile.price_range[0]:.0f}-{symbol}{profile.price_range[1]:.0f}."
             )
         prompt = [
             SystemMessage(
                 content="\n".join(
-                    [SUPERVISOR_SYSTEM + context, language_directive(language), CATALOG_LANGUAGE_RULE]
+                    [SUPERVISOR_SYSTEM + context, language_directive(language), catalog_language_rule(CATEGORIES)]
                 )
             ),
             *(messages or []),

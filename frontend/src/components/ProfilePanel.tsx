@@ -106,6 +106,7 @@ export default function ProfilePanel({
   experiment,
   latencyMs,
   timings,
+  formatPrice,
 }: {
   users: UserSummary[]
   userId: string
@@ -114,6 +115,7 @@ export default function ProfilePanel({
   experiment: ExperimentInfo | null
   latencyMs: number | null
   timings: Record<string, number> | null
+  formatPrice: (amount: number) => string
 }) {
   const { t, fill, segment, category } = useI18n()
   const [expanded, setExpanded] = useState(false)
@@ -189,10 +191,7 @@ export default function ProfilePanel({
                 <Row label={t('row_frequency')} value={fill('frequency_value', { n: person.rfm.orders })} />
                 <Row
                   label={t('row_monetary')}
-                  value={`$${person.rfm.lifetime_value.toLocaleString('en-US', {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })}`}
+                  value={formatPrice(person.rfm.lifetime_value)}
                 />
                 <Row
                   label={t('row_rfm_score')}
@@ -212,7 +211,7 @@ export default function ProfilePanel({
                 />
                 <Row
                   label={t('row_budget')}
-                  value={`$${person.price_range[0].toFixed(0)} – $${person.price_range[1].toFixed(0)}`}
+                  value={`${formatPrice(person.price_range[0])} – ${formatPrice(person.price_range[1])}`}
                 />
               </div>
             )}

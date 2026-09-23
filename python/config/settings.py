@@ -18,9 +18,15 @@ class Settings(BaseSettings):
     # (only enable this for providers that accept the `thinking` parameter)
     llm_disable_thinking: bool = False
 
+    # Data source: auto = generated dataset when present, else the mock catalog
+    data_source: str = "auto"
+
     # Pipeline
     max_products: int = 3       # products shown after aggregation
     max_candidates: int = 12    # candidates kept after recall
+
+    # Currency of the catalog (drives price symbols in the UI and in prompts)
+    currency: str = "CNY"
 
     # Agent timeouts (seconds)
     agent_timeout_default: float = 8.0

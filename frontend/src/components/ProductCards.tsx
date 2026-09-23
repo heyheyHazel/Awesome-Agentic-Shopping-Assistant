@@ -18,6 +18,16 @@ const CATEGORY_EMOJI: Record<string, string> = {
   Accessories: '🕶️',
   Gaming: '🎮',
   Food: '☕',
+  // ShopSimulator (Chinese catalog) domains
+  家居家装: '🕯️',
+  美妆个护健康: '💄',
+  生产材料农用品: '🧰',
+  休闲娱乐文教: '🎨',
+  服饰鞋包饰品: '👗',
+  家用电器数码: '🔌',
+  食品饮品: '☕',
+  运动户外交通: '🎒',
+  母婴儿童: '🧸',
 }
 
 const BADGE_TONES: Record<string, string> = {
@@ -51,7 +61,13 @@ function computeBadges(products: Product[]) {
   return badges
 }
 
-export default function ProductCards({ products }: { products: Product[] }) {
+export default function ProductCards({
+  products,
+  formatPrice,
+}: {
+  products: Product[]
+  formatPrice: (amount: number) => string
+}) {
   const { t, category, tag } = useI18n()
   const badges = computeBadges(products)
 
@@ -80,7 +96,7 @@ export default function ProductCards({ products }: { products: Product[] }) {
               <span className="text-faint">({product.rating_count})</span>
             </div>
 
-            <p className="mt-2 text-base font-bold text-brand">${product.price.toFixed(2)}</p>
+            <p className="mt-2 text-base font-bold text-brand">{formatPrice(product.price)}</p>
 
             <div className="mt-2 flex flex-wrap gap-1">
               {product.tags.slice(0, 3).map((item) => (
