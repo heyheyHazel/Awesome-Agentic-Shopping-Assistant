@@ -1,4 +1,4 @@
-import { Timer, TrendingUp, Trophy } from 'lucide-react'
+import { Timer, Trophy } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { ExperimentInfo, ProfileResponse, UserSummary } from '../types'
 
@@ -202,11 +202,6 @@ export default function ProfilePanel({
         <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-soft text-brand">
           <Timer size={18} />
         </span>
-      </div>
-
-      <div className="card flex items-center gap-2.5 p-3.5 text-[11px] text-muted">
-        <TrendingUp size={14} className="shrink-0 text-success" />
-        Thompson Sampling reallocates traffic to the winning variant as outcomes arrive.
       </div>
     </aside>
   )
