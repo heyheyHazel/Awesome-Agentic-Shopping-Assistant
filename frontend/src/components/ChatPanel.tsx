@@ -89,7 +89,7 @@ export default function ChatPanel({
   }, [feed])
 
   return (
-    <section className="card flex h-[calc(100vh-232px)] min-h-[560px] flex-col overflow-hidden">
+    <section className="card flex h-full min-h-[540px] flex-col overflow-hidden lg:min-h-0">
       <header className="flex items-center justify-between border-b border-line px-4 py-3">
         <div className="flex items-center gap-2 text-sm font-semibold">
           <MessagesSquare size={16} className="text-brand" />

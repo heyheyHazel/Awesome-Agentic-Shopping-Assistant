@@ -26,20 +26,20 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen">
-      <div className="mx-auto flex max-w-[1560px] flex-col gap-5 px-4 py-6 lg:px-8">
+    <div className="min-h-screen lg:h-dvh lg:overflow-hidden">
+      <div className="mx-auto flex h-full max-w-[1560px] flex-col gap-4 px-4 py-4 lg:px-8">
         <Header />
 
-        <main className="grid items-start gap-5 lg:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)_320px]">
-          <div className="order-2 lg:order-1">
+        <main className="grid min-h-0 flex-1 items-stretch gap-5 lg:grid-cols-[300px_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)_320px]">
+          <div className="scroll-slim order-2 lg:order-1 lg:h-full lg:overflow-y-auto lg:pr-1">
             <AgentPanel states={agentStates} />
           </div>
 
-          <div className="order-1 lg:order-2">
+          <div className="order-1 min-h-0 lg:order-2 lg:h-full">
             <ChatPanel feed={feed} isStreaming={isStreaming} onSend={send} onNewChat={newChat} />
           </div>
 
-          <div className="order-3 xl:sticky xl:top-6">
+          <div className="scroll-slim order-3 lg:h-full lg:overflow-y-auto lg:pr-1">
             <ProfilePanel
               users={users}
               userId={userId}
