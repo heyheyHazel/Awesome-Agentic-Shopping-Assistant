@@ -1,0 +1,24 @@
+{
+  "model": "Qwen/Qwen3-1.7B",
+  "init_adapter": "runs/qwen3-1.7b-sft",
+  "output_dir": "runs/qwen3-1.7b-grpo-opd",
+  "tasks_name": "rl",
+  "steps": 100,
+  "group_size": 4,
+  "tasks_per_step": 5,
+  "learning_rate": 1e-06,
+  "temperature": 1.0,
+  "max_response_tokens": 256,
+  "max_context_tokens": 12288,
+  "kl_coef": 0.001,
+  "concurrency": 4,
+  "seed": 1234,
+  "distill": {
+    "mode": "forward_kl",
+    "beta": 0.1,
+    "action_tokens_only": false
+  },
+  "teacher_path": "Qwen/Qwen3-8B",
+  "self_teacher": false
+}
+

@@ -1,0 +1,15 @@
+{
+  "model": "Qwen/Qwen3-1.7B",
+  "data": "runs/sft_data/turn_examples.jsonl",
+  "output_dir": "runs/qwen3-1.7b-sft",
+  "epochs": 1.0,
+  "batch_size": 1,
+  "grad_accum": 8,
+  "learning_rate": 1e-05,
+  "max_seq_len": 12288,
+  "lora_rank": 0,
+  "dtype": "bfloat16",
+  "save_steps": 200,
+  "seed": 1234
+}
+
