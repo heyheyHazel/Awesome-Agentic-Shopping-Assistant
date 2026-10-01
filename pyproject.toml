@@ -48,6 +48,11 @@ where = ["src"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 pythonpath = ["src"]
+# The SFT entry point is the only test that runs a real optimiser step; it takes
+# minutes on a CPU-only box and is deselected here. Run it with `pytest -m slow`,
+# which CI does on the torch job.
+addopts = "-m 'not slow'"
+markers = ["slow: takes minutes on CPU; exercises a full training step"]
 
 [tool.ruff]
 line-length = 100

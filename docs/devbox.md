@@ -117,13 +117,31 @@ pools, checkpoints, raw data, the test suite and free disk — is checked.
     PASS  task pools built and sized as documented
     PASS  checkpoints: Qwen3-0.6B 1.52 GB, Qwen3-1.7B 4.08 GB, Qwen3-4B 8.06 GB
     PASS  raw files match .verified.json; persona side-car complete
-    PASS  test suite green: 113 passed, 1 skipped
+    PASS  test suite green: 117 passed, 1 skipped, 1 deselected
     INFO  37 GB free
     READY: everything except a GPU allocation is in place.
 
-The one skip is the end-to-end gradient test, which needs more than the 2 GB the
-container is capped at before a card is allocated. It is expected to pass on the
-first run after the allocation.
+The skip is the gradient test in `test_training_smoke.py`, which needs more than
+the 2 GB the container is capped at before a card is allocated. The deselected
+test is the slow one below.
+
+### The SFT entry point has been executed
+
+`tests/test_sft_run.py` calls `train()` itself — the function the GPU run calls —
+on a two-layer model built from the real checkpoint's configuration and
+tokenizer, writes two synthetic examples through the real data pipeline, runs one
+optimiser step, and checks that a checkpoint and its manifest land on disk. It
+passes here, which means everything under the model-loading step is known to
+work: the optimiser arguments, the collator, the trainer loop, the save path and
+the manifest.
+
+It takes about five minutes on one CPU core, so it is marked `slow` and
+deselected by default:
+
+    .venv/bin/python -m pytest -q -m slow      # the full training step
+    .venv/bin/python -m pytest -q              # everything else, ~50 s
+
+CI runs both, in the torch job.
 
 What is left is not preparation:
 

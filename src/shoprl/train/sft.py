@@ -146,13 +146,24 @@ def build_training_arguments(config: SftConfig, examples: int):
     )
 
 
-def train(config: SftConfig) -> dict[str, Any]:
+def train(
+    config: SftConfig,
+    *,
+    model: Any = None,
+    tokenizer: Any = None,
+) -> dict[str, Any]:
+    """Run supervised fine-tuning and return the manifest it wrote.
+
+    ``model`` and ``tokenizer`` exist so the entry point itself can be exercised
+    on a two-layer model: everything below the loading step is the code that runs
+    on a real card, and it is worth knowing it works before one is allocated.
+    """
     import torch
     from transformers import Trainer
 
     set_seed(config.seed)
-    tokenizer = load_tokenizer(config.model)
-    model = load_model(config.model)
+    tokenizer = tokenizer or load_tokenizer(config.model)
+    model = model or load_model(config.model)
     dataset = TurnDataset(config.data, config.max_seq_len)
     if not len(dataset):
         raise SystemExit(f"no trainable examples under {config.max_seq_len} tokens in {config.data}")

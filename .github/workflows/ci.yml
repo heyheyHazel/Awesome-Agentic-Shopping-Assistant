@@ -53,3 +53,5 @@ jobs:
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: pip install transformers
       - run: pytest -q
+      # The full training step, opt-in because it takes minutes on CPU.
+      - run: pytest -q -m slow
