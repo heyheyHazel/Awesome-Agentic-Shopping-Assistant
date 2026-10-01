@@ -36,6 +36,9 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: pip install -e ".[dev]"
       - run: pytest -q
+      # The app itself, over real HTTP, against a canned model: no API key and no
+      # GPU, so a broken route or SSE frame fails the build.
+      - run: bash scripts/check_server.sh
 
   # The GPU-side code is written against torch, so the objective and the collator
   # are checked on CPU where no card is needed.

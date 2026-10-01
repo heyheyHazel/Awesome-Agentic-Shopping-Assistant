@@ -165,6 +165,10 @@ pytest -q
 | `token` | `content` | 逐字流式回复 |
 | `done` | `latency_ms`, `timings` | 响应耗时卡片（按工具分解） |
 | `error` | `message` | 错误气泡 |
+| `context` | `tokens` | 本轮发给模型的上下文 token 数（前端暂未消费，可用于上下文占用指示） |
+| `trajectory` | `termination`, `reward` | 本轮的终止原因与奖励（前端暂未消费，调试用；与训练侧记录的是同一个 `Trajectory`） |
+
+最后两个事件由 `shoprl.harness` 的循环直接发出，是前后端共用同一个循环的结果：训练侧读 `Trajectory` 对象，服务侧把它压成两个事件。
 
 ## 配置
 

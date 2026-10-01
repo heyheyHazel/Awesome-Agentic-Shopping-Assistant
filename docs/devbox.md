@@ -127,6 +127,26 @@ test is the slow one below.
 
 ### Both training entry points have been executed
 
+**The interactive app.** `bash scripts/check_server.sh` starts the canned model
+and the real server against the real catalogue, then checks the HTTP surface and
+a whole SSE conversation over a socket:
+
+    PASS  server up on :8077
+    PASS  health
+    PASS  meta: {"data_source":"shopsimulator","currency":"CNY","currency_symbol":"¥"}
+    PASS  frontend shell served
+    PASS  profile for U02358E8
+    PASS  sse event: session / experiment / tool / products / token / done
+    PASS  product cards carried real catalogue ids
+    PASS  no error events
+    SERVER OK: HTTP surface and SSE conversation both work.
+
+That is the front-to-back claim in the objective, checked rather than asserted:
+the real FastAPI app, the real httpx client, the real tool registry, the real
+23,421-product catalogue and the real SSE framing, with only the model canned.
+`scripts/stub_llm.py` is the canned model; it is also the way to develop the UI
+without spending API credit. CI runs the same script.
+
 **SFT.** `tests/test_sft_run.py` calls `train()` itself — the function the GPU run
 calls — on a two-layer model built from the real checkpoint's configuration and
 tokenizer, writes two synthetic examples through the real data pipeline, runs one
