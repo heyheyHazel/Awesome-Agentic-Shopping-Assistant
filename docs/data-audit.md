@@ -20,7 +20,7 @@ main release.
 | SKU options and their prices | complete: 239,925 option values |
 | Personas | 4,009 unique users, 4,666 records; rendered into a ~266-character prompt block (`shoprl.env.persona`) |
 | `fine_items_eval_persona.jsonl` | complete: 1,343 records |
-| `fine_items_train_persona.jsonl` | **truncated**: 1,603 usable of 3,323 |
+| `fine_items_train_persona.jsonl` | complete after a re-fetch: 3,323 records, 2,841 personas |
 | Upstream Lucene search index | **absent**: not distributed, needs Java 21 |
 | Model weights (2B / 4B) | out of scope for this audit |
 
@@ -75,26 +75,27 @@ and an unusable one for training. `shoprl.env.catalog` builds a second artefact
 (`data/generated/shop_products.jsonl.gz`, 14 MB) that keeps all of it, in source
 order.
 
-## 3. Two defects worth knowing about
+## 3. Two findings worth knowing about
 
-### `fine_items_train_persona.jsonl` is truncated
+### `fine_items_train_persona.jsonl` arrived truncated, and was re-fetched
+
+The first download of this side-car file stopped after 1,603 of the 3,323
+train-split records that carry a persona, leaving the last line cut off
+mid-record. The downloader had already flagged it: `.verified.json` recorded
+sizes for the other two raw files and had no entry for this one, which is how the
+fetch script marks a file that never passed its integrity check.
+
+It has since been re-fetched and now verifies cleanly:
 
 ```bash
-wc -l data/raw/fine_items_train_persona.jsonl     # 1616 lines
+wc -l data/raw/fine_items_train_persona.jsonl     # 3323 lines
+# 3323 records parsed, 0 malformed, 2841 distinct personas
 ```
 
-The file should hold the 3,323 train-split records that carry a persona. It holds
-1,603 complete records plus one cut off mid-record; the remaining ~1,720 are
-missing. The downloader itself flagged this: `.verified.json` records sizes for
-the other two raw files and has no entry for this one, which is how the fetch
-script marks a file that never passed its integrity check.
-
-Fix: `rm data/raw/fine_items_train_persona.jsonl && python scripts/fetch_data.py
---source hf --files fine_items_train_persona.jsonl`.
-
-Nothing in this repository depends on it. The environment and all task pools are
-built from the main `.json.gz`, which is intact. Persona-conditioned tasks read
-the persona from that same file.
+`data/raw/.verified.json` now lists it alongside the other two files. The
+re-fetch is one command on any machine that can reach a mirror, and nothing else
+depended on it: the environment and every task pool are built from the main
+`.json.gz`, which was intact throughout.
 
 ### 106 products are dropped by the web-app price filter
 

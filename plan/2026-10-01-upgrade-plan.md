@@ -33,8 +33,8 @@ Two problems followed from that:
 ## Delivered in this pass
 
 1. **Audit** — `docs/data-audit.md`: 23,421 tasks, source order is the id space, a
-   truncated persona file, 106 products lost to a price filter, and a measured
-   95.2 % oracle ceiling.
+   persona side-car that arrived truncated and was re-fetched, 106 products lost
+   to a price filter, and a measured 95.2 % oracle ceiling.
 2. **Environment** — `src/shoprl/env/`: catalogue with options, in-process BM25,
    the page-flow session, the upstream reward with four sub-scores, an env pool
    with per-rollout leases, and a client for the reference service.

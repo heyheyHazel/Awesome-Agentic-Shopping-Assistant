@@ -134,7 +134,7 @@ python -m shopping_assistant                  # http://localhost:8000 就是完�
 
 ### 4. 测试
 
-94 个测试，全部不需要 API Key、不需要 GPU（固定跑内置演示数据，与 `data/` 是否存在无关）：
+110 个测试，全部不需要 API Key、不需要 GPU（固定跑内置演示数据，与 `data/` 是否存在无关）：
 
 ```bash
 pytest -q
@@ -215,7 +215,7 @@ pytest -q
 │   ├── eval/                       # rollout 评测 + 官方指标
 │   └── cli.py                      # python -m shoprl.cli <stage>
 │
-├── tests/                          # 94 个测试，按包结构对齐
+├── tests/                          # 110 个测试，按包结构对齐
 │   ├── test_api.py                 # HTTP 层
 │   ├── test_agent_tools.py         # 4 个工具
 │   ├── test_domain.py              # RFM / 库存 / 货币
@@ -321,8 +321,8 @@ bash training/scripts/05_eval.sh              # official_test 上的单次 rollo
 
 - 原始发布里 **23,421 条任务**，行序就是 task id；旧的数据管线只保留了商品，**任务和 SKU 选项全部被丢掉**，
   所以此前这个仓库无法训练；
-- `fine_items_train_persona.jsonl` 是**截断的**（3,323 条只拿到 1,603 条），且未被写入
-  `.verified.json`；主数据文件完好，不影响训练；
+- 边车文件 `fine_items_train_persona.jsonl` 第一次下载时**被截断**（3,323 条只拿到 1,603 条），
+  已重新拉取并校验通过（3,323 条、0 条损坏、2,841 个 persona）；主数据文件自始至终完好；
 - 用「知道答案」的 oracle 跑评测集，`r_hard` 上限只有 **95.2 %**：约 5 % 的任务因上游把选项值里的
   `/` 改写为 ` | ` 而无法得分。任何模型的分数都受这个上限约束；
 - `r_type` 与 `r_price` 在这份数据上**恒为 1**（记录里没有 `query` 字段；价格上限总是高于目标商品价格），

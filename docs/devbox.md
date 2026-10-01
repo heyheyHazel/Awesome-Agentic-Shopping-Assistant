@@ -1,0 +1,109 @@
+# The training box
+
+Everything here describes the AutoDL container this project now lives on. Half of
+it is not obvious from the repository, and the container is not immortal: if it
+is rebuilt, these are the steps that make it work again.
+
+## What the machine is
+
+| | |
+|---|---|
+| Host | `ssh -p 48325 root@connect.westb.seetacloud.com` (alias `devbox`) |
+| Project | `/root/autodl-tmp/Agentic-Shopping-Assistant` |
+| OS | Ubuntu 22.04.5, kernel 5.15 |
+| CPU / RAM | 1 vCPU visible, ~1 TB RAM |
+| Container memory cap | **2 GB**, no swap, until a GPU is allocated |
+| Disk | 50 GB on `/root/autodl-tmp` (data disk), 30 GB on `/` |
+| GPU | one RTX 6000, **not yet allocated** |
+| Python | 3.12.3 from `/root/miniconda3` |
+| torch | 2.12.1+cu130, preinstalled by the image |
+
+The project deliberately lives on `/root/autodl-tmp` rather than `/root`: the root
+filesystem is 30 GB and the checkpoints alone are about 14 GB.
+
+## Network
+
+huggingface.co is unreachable from this container. Two mirrors are not:
+
+| Endpoint | Measured | Used for |
+|---|---|---|
+| `hf-mirror.com` | ~1 MB/s | `HF_ENDPOINT`, the fallback for weights |
+| `modelscope.cn` | ~6 MB/s | the default source for weights |
+| `pypi.org` | works | packages |
+
+`scripts/download_models.py` tries ModelScope first and falls back to the Hugging
+Face mirror. `scripts/fetch_data.py` already points at `hf-mirror.com` and
+`aifasthub.com`.
+
+## The Python environment
+
+`scripts/setup_devbox.sh` builds it. Two decisions are worth keeping.
+
+**The venv inherits the image's torch** via `--system-site-packages`. torch is
+matched to the image's CUDA runtime; reinstalling it costs several GB and can swap
+the CUDA build underneath a working driver.
+
+**Everything after the venv is installed with pip, not uv.** uv's resolver does
+not treat inherited site-packages as satisfying a requirement, so it re-fetches
+its own ~2.5 GB CUDA build of the same torch version. pip inside the venv sees the
+inherited torch and leaves it alone.
+
+    bash scripts/setup_devbox.sh          # idempotent
+    .venv/bin/python -m pytest -q         # 100+ tests, no GPU needed
+
+## Data and weights
+
+The ShopSimulator release was copied from the workstation rather than re-fetched,
+which is why the box needs no dataset download. `data/raw/.verified.json` records
+all three raw files, including the persona side-car that had to be re-fetched to
+its full 3,323 records.
+
+    python -m shoprl.cli catalogue        # 23,421 products, ~3 s
+    python -m shoprl.cli tasks            # five pools, seeded and disjoint
+    python scripts/download_models.py     # Qwen3-0.6B / 1.7B / 4B
+
+## What broke, and is fixed
+
+The box runs **transformers 5.17** and the training code was written against 4.x.
+Both failures were hard errors on the first line of a run.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `from_pretrained` rejected the weight dtype | v5 renamed `torch_dtype` to `dtype` | `shoprl.train.common.precision_kwarg` picks by major version |
+| `TrainingArguments` rejected `warmup_ratio` | v5 removed it | the fraction is converted to `warmup_steps` in `build_training_arguments` |
+| every SFT example came out with an empty target | v5 returns a **dict** from `apply_chat_template` where 4.x returned a list, and `list(dict)` yields its keys | `shoprl.data.sft._render` normalises list, dict and tensor shapes |
+| the first training step died with `unsupported operand type(s) for +: 'dict' and 'list'` | a comprehension variable shadowed the collator's parameter | rename to `rows` in `train.sft.build_collator` |
+
+A fifth only appears on a CPU-only box: `bf16=True` is a hard error without a GPU,
+so the precision flags are gated on `torch.cuda.is_available()` and `use_cpu` is
+set otherwise.
+
+The first three were only reachable with a real tokenizer and a real
+`TrainingArguments`; the last two would have failed on the first step of the
+first run. `tests/test_training_smoke.py`, `tests/test_pipeline_smoke.py` and one
+new case in `tests/test_shoprl_data.py` cover them, and all of them pass here.
+
+## Memory
+
+`/sys/fs/cgroup/memory.max` is 2 GB with no swap until a GPU is allocated, which
+is far below what a forward pass through a 151k-vocabulary head needs. The
+end-to-end gradient test therefore skips itself while the cap is low and runs
+once the card — and with it the memory — is available. Nothing else in the suite
+needs more than a few hundred MB.
+
+## What is deliberately absent
+
+**vLLM.** The RL rollout engine falls back to `transformers` generation, which
+works everywhere. vLLM decides whether an RL step takes minutes or tens of
+minutes, so install it once a GPU is allocated:
+
+    .venv/bin/python -m pip install vllm
+
+## Readiness
+
+    bash scripts/check_ready.sh
+
+Prints one PASS/FAIL line per requirement and exits non-zero if anything is
+missing. A missing GPU is reported as INFO rather than a failure, because the card
+may simply not be allocated yet. Everything else — venv, torch, catalogue, task
+pools, checkpoints, raw data, the test suite and free disk — is checked.
