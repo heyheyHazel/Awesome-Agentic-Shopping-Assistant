@@ -107,3 +107,28 @@ Prints one PASS/FAIL line per requirement and exits non-zero if anything is
 missing. A missing GPU is reported as INFO rather than a failure, because the card
 may simply not be allocated yet. Everything else — venv, torch, catalogue, task
 pools, checkpoints, raw data, the test suite and free disk — is checked.
+
+## State as of the initial provisioning
+
+    PASS  venv at .venv/bin/python
+    INFO  torch 2.12.1+cu130, cuda build 13.0
+    INFO  CUDA not visible yet (no GPU allocated)
+    PASS  catalogue built: 23,421 products
+    PASS  task pools built and sized as documented
+    PASS  checkpoints: Qwen3-0.6B 1.52 GB, Qwen3-1.7B 4.08 GB, Qwen3-4B 8.06 GB
+    PASS  raw files match .verified.json; persona side-car complete
+    PASS  test suite green: 113 passed, 1 skipped
+    INFO  37 GB free
+    READY: everything except a GPU allocation is in place.
+
+The one skip is the end-to-end gradient test, which needs more than the 2 GB the
+container is capped at before a card is allocated. It is expected to pass on the
+first run after the allocation.
+
+What is left is not preparation:
+
+1. allocate the RTX 6000 and re-run `scripts/check_ready.sh` to confirm CUDA is
+   visible and the skipped test now runs;
+2. collect teacher trajectories (`training/scripts/01_collect_teacher.sh`), which
+   needs an API key and no GPU at all — it could be done before the card lands;
+3. SFT, then GRPO, then evaluation against the three baselines.
