@@ -11,17 +11,16 @@ No model forward pass, so it runs on a CPU-only container.
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from shoprl.harness.types import Message, ModelResponse, ToolCall
+from shoprl.harness.types import Message
+from tests.oracle_teacher import OracleTeacher
 
 CHECKPOINT = Path(os.environ.get("SHOPRL_TEST_CHECKPOINT", "models/Qwen3-1.7B"))
-NAVIGATION = {"buy now", "< prev", "back to search", "description", "features", "reviews"}
 
 
 def require_checkpoint() -> Path:
@@ -92,102 +91,6 @@ def test_the_sampled_span_is_reproduced_by_the_chat_template():
     assert sampled and sampled == rebuilt
 
 
-class TokenizingTeacher:
-    """A scripted teacher whose replies carry the tokens a real engine reports.
-
-    The reply is rendered through the chat template to obtain the ids an engine
-    would have sampled; the trainer then rebuilds the same span from the message.
-    Agreement between those two is exactly what is under test.
-    """
-
-    def __init__(self, catalogue, tokenizer, task_id: int):
-        self.tokenizer = tokenizer
-        self.target = catalogue.at(task_id)
-        self.phase = "reset"
-        self.satisfied: set[int] = set()
-
-    def _response(self, name: str, **arguments) -> ModelResponse:
-        raise NotImplementedError
-
-    @staticmethod
-    def _clickables(page: str) -> list[str]:
-        marker = "可点击的按钮: "
-        if marker not in page:
-            return []
-        try:
-            return json.loads(page.split(marker, 1)[1].strip())
-        except json.JSONDecodeError:
-            return []
-
-    def complete(self, messages, tools=None, **_kwargs) -> ModelResponse:
-        from shoprl.env.reward import _ratio
-
-        page = next((m.content for m in reversed(messages) if m.role == "tool"), "")
-        clickables = self._clickables(page)
-        asin = self.target.asin.lower()
-
-        if self.phase == "reset":
-            self.phase = "search"
-            return self._response(messages, "shop_reset")
-
-        if self.phase in {"search", "paging"}:
-            if asin in clickables:
-                self.phase = "item"
-                return self._response(messages, "shop_act", action=f"click[{asin}]")
-            if self.phase == "search":
-                self.phase = "paging"
-                return self._response(
-                    messages, "shop_act", action=f"search[{self.target.instruction}]"
-                )
-            if "next >" in clickables:
-                return self._response(messages, "shop_act", action="click[next >]")
-            return ModelResponse(text="the target is not in these results")
-
-        if self.phase == "item":
-            options = [value for value in clickables if value not in NAVIGATION]
-            for index, wanted in enumerate(self.target.instruction_options):
-                if index in self.satisfied or not options:
-                    continue
-                score, best = max(
-                    ((_ratio(value, wanted.lower()), value) for value in options),
-                    default=(0.0, ""),
-                )
-                if score > 85:
-                    self.satisfied.add(index)
-                    return self._response(messages, "shop_act", action=f"click[{best}]")
-            if "buy now" in clickables:
-                self.phase = "done"
-                return self._response(messages, "shop_act", action="click[buy now]")
-
-        return ModelResponse(text="no move left")
-
-    def _response(self, messages, name: str, **arguments) -> ModelResponse:
-        """Sample the continuation exactly as an engine would: full minus prompt."""
-        from shoprl.data.sft import _render
-        from shoprl.train.grpo import TOOLS
-
-        conversation = [message.as_dict() for message in messages]
-        assistant = {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [
-                {"type": "function", "function": {"name": name, "arguments": arguments}}
-            ],
-        }
-        prompt_ids = _render(
-            self.tokenizer, conversation, TOOLS, tokenize=True, add_generation_prompt=True
-        )
-        full_ids = _render(self.tokenizer, conversation + [assistant], TOOLS, tokenize=True)
-        ids = list(full_ids[len(prompt_ids) :])
-        return ModelResponse(
-            tool_calls=[ToolCall(id=name, name=name, arguments=arguments)],
-            token_ids=ids,
-            # A real engine reports each sampled token's log-probability; the
-            # value is irrelevant here, only that it is present and aligned.
-            logprobs=[-0.1] * len(ids),
-        )
-
-
 def test_a_real_rollout_becomes_non_empty_training_samples():
     from shoprl.env.local import EnvPool
     from shoprl.env.search import Bm25Index
@@ -199,7 +102,7 @@ def test_a_real_rollout_becomes_non_empty_training_samples():
     tokenizer = require_tokenizer()
     task_id = load_task_pool("dev")[0].task_id
     pool = EnvPool(catalogue, Bm25Index.build(catalogue), capacity=1)
-    runner = EpisodeRunner(TokenizingTeacher(catalogue, tokenizer, task_id), pool, max_turns=20)
+    runner = EpisodeRunner(OracleTeacher(catalogue, tokenizer, task_id), pool, max_turns=20)
 
     trajectory = runner.run(task_id)
 

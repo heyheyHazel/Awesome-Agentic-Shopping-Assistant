@@ -84,12 +84,16 @@ def gather_token_logprobs(logits, input_ids):
 
     The last position predicts nothing and the first token has no predecessor, so
     the returned tensor is ``input_ids`` shifted by one.
-    """
-    import torch
 
-    logprobs = torch.log_softmax(logits.float()[:, :-1], dim=-1)
-    targets = input_ids[:, 1:].unsqueeze(-1)
-    return logprobs.gather(-1, targets).squeeze(-1)
+    Computing ``log p = logit - logsumexp(logits)`` rather than calling
+    ``log_softmax`` avoids materialising a second ``[batch, tokens, vocab]``
+    tensor. At a 151k vocabulary and a few thousand tokens that tensor is
+    gigabytes, and it buys nothing here: only the chosen token's probability is
+    ever used.
+    """
+    shifted = logits.float()[:, :-1]
+    chosen = shifted.gather(-1, input_ids[:, 1:].unsqueeze(-1)).squeeze(-1)
+    return chosen - shifted.logsumexp(dim=-1)
 
 
 def clipped_policy_loss(current, old, advantage, mask, *, clip_low: float = 0.2, clip_high: float = 0.28):
@@ -118,7 +122,6 @@ def k3_kl(current, reference, mask):
     Non-negative and low variance, which matters because the reference term is
     computed once per step on the same rollouts as the reward.
     """
-
     delta = reference - current
     per_token = delta.exp() - delta - 1.0
     weights = mask.to(per_token.dtype)
@@ -198,17 +201,24 @@ class GrpoTrainer:
         engine: Any | None = None,
         teacher: TeacherScorer | None = None,
         pool: Any | None = None,
+        model: Any | None = None,
+        tokenizer: Any | None = None,
     ):
+        """Wire up a run.
+
+        ``model``, ``tokenizer`` and ``engine`` are injection points: with a
+        two-layer model and a scripted engine the whole loop — rollouts,
+        advantages, the update, the checkpoint — runs without a GPU, which is how
+        it is tested. Left unset, everything is loaded from ``config``.
+        """
         import torch
 
         self.config = config
         self.torch = torch
         set_seed(config.seed)
-        self.tokenizer = load_tokenizer(config.model)
-        self.model = load_model(
-            config.model,
-            trainable=True,
-            adapter=config.init_adapter or None,
+        self.tokenizer = tokenizer or load_tokenizer(config.model)
+        self.model = model or load_model(
+            config.model, trainable=True, adapter=config.init_adapter or None
         )
         self.engine = engine or HFRolloutEngine(
             self.model, self.tokenizer, max_new_tokens=config.max_response_tokens

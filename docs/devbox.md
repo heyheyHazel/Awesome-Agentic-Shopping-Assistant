@@ -125,7 +125,31 @@ The skip is the gradient test in `test_training_smoke.py`, which needs more than
 the 2 GB the container is capped at before a card is allocated. The deselected
 test is the slow one below.
 
-### The SFT entry point has been executed
+### Both training entry points have been executed
+
+**SFT.** `tests/test_sft_run.py` calls `train()` itself — the function the GPU run
+calls — on a two-layer model built from the real checkpoint's configuration and
+tokenizer, writes two synthetic examples through the real data pipeline, runs one
+optimiser step, and checks that a checkpoint and its manifest land on disk. It
+passes, which means everything under the model-loading step works: the optimiser
+arguments, the collator, the trainer loop, the save path and the manifest.
+
+**GRPO.** `tests/test_grpo_run.py` drives `GrpoTrainer.train()` with the real
+catalogue, a real env pool and a scripted engine that solves every other
+candidate. It loads a task from the seeded pool, rolls out a group, centres the
+rewards, detects the group's variance, updates, logs and checkpoints. Two
+candidates with different outcomes are deliberate: an all-equal group produces
+zero advantages and would leave the interesting half of the loop unexecuted.
+
+The sampled turns are around 2,700 tokens against a 151k vocabulary, so a single
+backward pass needs several GB — more than this container has before a card is
+allocated. `gather_token_logprobs` therefore computes
+`logit - logsumexp(logits)` instead of calling `log_softmax`, which avoids a
+second `[batch, tokens, vocab]` tensor. The gradient step itself is a separate
+test that skips below 6 GB and runs in CI and on a host with a card.
+
+The slow tests total about five minutes on one CPU core, so they are marked
+`slow` and deselected by default:
 
 `tests/test_sft_run.py` calls `train()` itself — the function the GPU run calls —
 on a two-layer model built from the real checkpoint's configuration and
