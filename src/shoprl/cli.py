@@ -129,16 +129,31 @@ def cmd_prepare_sft(args: argparse.Namespace) -> int:
     return 0
 
 
-def _model_config(args: argparse.Namespace):
+def _required(values: dict[str, Any], key: str):
+    """Read a value the run cannot start without, and say how to supply it."""
+    if not values.get(key):
+        flag = key.replace("_", "-")
+        raise SystemExit(f'{key} is required: pass --{flag} or set "{key}" in the config file')
+    return values[key]
+
+
+def _model_config(args: argparse.Namespace, values: dict[str, Any] | None = None):
+    """Model settings, with the config file ahead of built-in defaults.
+
+    Every flag defaults to None rather than to a value: a non-None argparse
+    default is indistinguishable from a flag the user typed, and would silently
+    override whatever the config file says.
+    """
     from shoprl.train.common import ModelConfig
 
+    values = values or {}
     return ModelConfig(
-        name_or_path=args.model,
-        dtype=args.dtype,
-        attn_implementation=args.attn,
+        name_or_path=values.get("model") or args.model or "Qwen/Qwen3-1.7B",
+        dtype=values.get("dtype") or args.dtype or "bfloat16",
+        attn_implementation=values.get("attn") or args.attn or "sdpa",
         gradient_checkpointing=not args.no_gradient_checkpointing,
-        lora_rank=args.lora_rank,
-        lora_alpha=args.lora_alpha,
+        lora_rank=int(values.get("lora_rank") or args.lora_rank or 0),
+        lora_alpha=int(values.get("lora_alpha") or args.lora_alpha or 32),
     )
 
 
@@ -156,9 +171,9 @@ def cmd_sft(args: argparse.Namespace) -> int:
         ),
     )
     config = SftConfig(
-        model=_model_config(args),
-        data=Path(values["data"]),
-        output_dir=Path(values["output_dir"]),
+        model=_model_config(args, values),
+        data=Path(_required(values, "data")),
+        output_dir=Path(_required(values, "output_dir")),
         epochs=float(values.get("epochs", 1.0)),
         batch_size=int(values.get("batch_size", 1)),
         grad_accum=int(values.get("grad_accum", 8)),
@@ -194,8 +209,8 @@ def cmd_grpo(args: argparse.Namespace) -> int:
             action_tokens_only=args.distill_action_tokens_only,
         )
     config = GrpoConfig(
-        model=_model_config(args),
-        output_dir=Path(values["output_dir"]),
+        model=_model_config(args, values),
+        output_dir=Path(_required(values, "output_dir")),
         tasks_name=values.get("tasks_name", "rl"),
         steps=int(values.get("steps", 100)),
         group_size=int(values.get("group_size", 4)),
@@ -303,9 +318,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sft = sub.add_parser("sft", help="supervised fine-tuning")
     sft.add_argument("--config")
-    sft.add_argument("--model", default="Qwen/Qwen3-1.7B")
-    sft.add_argument("--data", required=True)
-    sft.add_argument("--output-dir", required=True)
+    sft.add_argument("--model")
+    sft.add_argument("--data")
+    sft.add_argument("--output-dir")
     sft.add_argument("--epochs", type=float)
     sft.add_argument("--batch-size", type=int)
     sft.add_argument("--grad-accum", type=int)
@@ -318,9 +333,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     grpo = sub.add_parser("grpo", help="GRPO with verifiable rewards (+ optional distillation)")
     grpo.add_argument("--config")
-    grpo.add_argument("--model", default="Qwen/Qwen3-1.7B")
-    grpo.add_argument("--output-dir", required=True)
-    grpo.add_argument("--tasks-name", default="rl")
+    grpo.add_argument("--model")
+    grpo.add_argument("--output-dir")
+    grpo.add_argument("--tasks-name")
     grpo.add_argument("--steps", type=int)
     grpo.add_argument("--group-size", type=int)
     grpo.add_argument("--tasks-per-step", type=int)
@@ -360,10 +375,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_model_flags(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--dtype", default="bfloat16", choices=["bfloat16", "float16", "float32"])
-    parser.add_argument("--attn", default="sdpa")
-    parser.add_argument("--lora-rank", type=int, default=0)
-    parser.add_argument("--lora-alpha", type=int, default=32)
+    parser.add_argument("--dtype", choices=["bfloat16", "float16", "float32"])
+    parser.add_argument("--attn")
+    parser.add_argument("--lora-rank", type=int)
+    parser.add_argument("--lora-alpha", type=int)
     parser.add_argument("--no-gradient-checkpointing", action="store_true")
 
 

@@ -1,5 +1,5 @@
 {
-  "model": "Qwen/Qwen3-1.7B",
+  "model": "models/Qwen3-1.7B",
   "data": "runs/sft_data/turn_examples.jsonl",
   "output_dir": "runs/qwen3-1.7b-sft",
   "epochs": 1.0,
@@ -12,4 +12,3 @@
   "save_steps": 200,
   "seed": 1234
 }
-

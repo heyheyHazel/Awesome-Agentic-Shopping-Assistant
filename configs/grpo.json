@@ -1,5 +1,5 @@
 {
-  "model": "Qwen/Qwen3-1.7B",
+  "model": "models/Qwen3-1.7B",
   "init_adapter": "runs/qwen3-1.7b-sft",
   "output_dir": "runs/qwen3-1.7b-grpo",
   "tasks_name": "rl",
@@ -14,4 +14,3 @@
   "concurrency": 4,
   "seed": 1234
 }
-
