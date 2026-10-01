@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from shoprl.data.sft import IGNORE_INDEX, build_turn_examples, write_sft_dataset
 
 HISTORY = ["-1", "-1"]
@@ -102,3 +104,44 @@ def test_write_sft_dataset_summarises_what_it_kept(tmp_path):
     assert (tmp_path / "turn_examples.jsonl").exists()
     assert (tmp_path / "summary.json").exists()
 
+
+class DictTokenizer(FakeTokenizer):
+    """transformers 5 returns a dict where 4.x returned a list."""
+
+    def apply_chat_template(self, conversation, *, tools=None, tokenize=True, add_generation_prompt=False):
+        ids = super().apply_chat_template(
+            conversation, tools=tools, tokenize=tokenize, add_generation_prompt=add_generation_prompt
+        )
+        return {"input_ids": ids, "attention_mask": [1] * len(ids)}
+
+
+def test_a_dict_shaped_template_result_still_yields_target_tokens():
+    """Iterating the dict would yield its keys and silently empty every target."""
+    data = record(
+        [[{"role": "user", "content": "task"}]],
+        [target("search[cup]")],
+    )
+
+    examples, rejected = build_turn_examples(data, DictTokenizer(), tools=[])
+
+    assert rejected == []
+    assert len(examples) == 1
+    assert examples[0].metadata["target_token_count"] > 0
+    assert any(label != IGNORE_INDEX for label in examples[0].labels)
+
+
+def test_the_collator_pads_ids_labels_and_mask_independently():
+    torch = pytest.importorskip("torch")
+    from shoprl.train.sft import build_collator
+
+    collate = build_collator(pad_token_id=0)
+    batch = collate(
+        [
+            {"input_ids": [5, 6, 7], "labels": [-100, -100, 9], "attention_mask": [1, 1, 1]},
+            {"input_ids": [5, 6], "labels": [-100, 8], "attention_mask": [1, 1]},
+        ]
+    )
+
+    assert batch["input_ids"].tolist() == [[5, 6, 7], [5, 6, 0]]
+    assert batch["labels"].tolist() == [[-100, -100, 9], [-100, 8, -100]]
+    assert batch["attention_mask"].tolist() == [[1, 1, 1], [1, 1, 0]]

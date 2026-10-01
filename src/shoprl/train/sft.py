@@ -9,6 +9,7 @@ token would train the model to write the pages it is supposed to read.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -78,9 +79,9 @@ def build_collator(pad_token_id: int):
     def collate(batch: list[dict[str, Any]]) -> dict[str, Any]:
         width = max(len(row["input_ids"]) for row in batch)
 
-        def pad(values: list[int], fill: int) -> torch.Tensor:
+        def pad(rows: list[list[int]], fill: int) -> torch.Tensor:
             return torch.tensor(
-                [values + [fill] * (width - len(values)) for values in batch], dtype=torch.long
+                [row + [fill] * (width - len(row)) for row in rows], dtype=torch.long
             )
 
         return {
@@ -92,9 +93,51 @@ def build_collator(pad_token_id: int):
     return collate
 
 
+def build_training_arguments(config: SftConfig, examples: int):
+    """Translate the run config into ``TrainingArguments``.
+
+    Kept separate from :func:`train` because it is the part that breaks when the
+    library moves: transformers 5 dropped ``warmup_ratio``, so the fraction is
+    converted to steps here, and a test can check the translation with no
+    checkpoint, no dataset and no GPU.
+    """
+    from transformers import TrainingArguments
+    import torch
+
+    steps_per_epoch = math.ceil(examples / max(1, config.batch_size * config.grad_accum))
+    total_steps = max(1, int(steps_per_epoch * config.epochs))
+
+    # Mixed precision needs a device that supports it: asking for bf16 on a
+    # CPU-only box is a hard error, and the CPU path is how this pipeline gets
+    # smoke-tested before a GPU is allocated.
+    accelerated = torch.cuda.is_available()
+    return TrainingArguments(
+        output_dir=str(config.output_dir),
+        num_train_epochs=config.epochs,
+        per_device_train_batch_size=config.batch_size,
+        gradient_accumulation_steps=config.grad_accum,
+        learning_rate=config.learning_rate,
+        weight_decay=config.weight_decay,
+        warmup_steps=int(config.warmup_ratio * total_steps),
+        lr_scheduler_type="cosine",
+        logging_steps=config.logging_steps,
+        save_steps=config.save_steps,
+        save_total_limit=2,
+        bf16=accelerated and config.model.dtype == "bfloat16",
+        fp16=accelerated and config.model.dtype == "float16",
+        use_cpu=not accelerated,
+        optim=config.optimizer,
+        gradient_checkpointing=config.model.gradient_checkpointing,
+        report_to=[] if config.report_to == "none" else [config.report_to],
+        seed=config.seed,
+        data_seed=config.seed,
+        remove_unused_columns=False,
+    )
+
+
 def train(config: SftConfig) -> dict[str, Any]:
     import torch
-    from transformers import Trainer, TrainingArguments
+    from transformers import Trainer
 
     set_seed(config.seed)
     tokenizer = load_tokenizer(config.model)
@@ -107,28 +150,7 @@ def train(config: SftConfig) -> dict[str, Any]:
     # LoRA adapter must not be given weight decay or its own optimizer state.
     trainable = [parameter for parameter in model.parameters() if parameter.requires_grad]
     uses_lora = config.model.lora_rank > 0
-
-    arguments = TrainingArguments(
-        output_dir=str(config.output_dir),
-        num_train_epochs=config.epochs,
-        per_device_train_batch_size=config.batch_size,
-        gradient_accumulation_steps=config.grad_accum,
-        learning_rate=config.learning_rate,
-        weight_decay=config.weight_decay,
-        warmup_ratio=config.warmup_ratio,
-        lr_scheduler_type="cosine",
-        logging_steps=config.logging_steps,
-        save_steps=config.save_steps,
-        save_total_limit=2,
-        bf16=config.model.dtype == "bfloat16",
-        fp16=config.model.dtype == "float16",
-        optim=config.optimizer,
-        gradient_checkpointing=config.model.gradient_checkpointing,
-        report_to=[] if config.report_to == "none" else [config.report_to],
-        seed=config.seed,
-        data_seed=config.seed,
-        remove_unused_columns=False,
-    )
+    arguments = build_training_arguments(config, len(dataset))
 
     trainer = Trainer(
         model=model,
@@ -154,6 +176,8 @@ def train(config: SftConfig) -> dict[str, Any]:
         "batch_size": config.batch_size,
         "grad_accum": config.grad_accum,
         "learning_rate": config.learning_rate,
+        "warmup_steps": warmup_steps,
+        "total_steps": total_steps,
         "max_seq_len": config.max_seq_len,
         "seed": config.seed,
         "data": str(config.data),
@@ -162,4 +186,3 @@ def train(config: SftConfig) -> dict[str, Any]:
     }
     write_run_manifest(config.output_dir, stats)
     return stats
-

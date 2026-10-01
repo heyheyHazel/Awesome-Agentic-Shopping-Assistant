@@ -50,6 +50,20 @@ def resolve_dtype(name: str):
     }[name]
 
 
+def precision_kwarg(config: ModelConfig) -> dict[str, Any]:
+    """Keyword ``from_pretrained`` wants for the weight dtype.
+
+    transformers 5 renamed ``torch_dtype`` to ``dtype``. Both spellings are
+    accepted at different versions, and passing the wrong one is a hard failure
+    before any weights load, so the choice is made once here.
+    """
+    import transformers
+
+    major = int(transformers.__version__.split(".")[0])
+    name = "dtype" if major >= 5 else "torch_dtype"
+    return {name: resolve_dtype(config.dtype)}
+
+
 def load_tokenizer(config: ModelConfig):
     from transformers import AutoTokenizer
 
@@ -66,9 +80,9 @@ def load_model(config: ModelConfig, *, trainable: bool = True, adapter: str | No
 
     model = AutoModelForCausalLM.from_pretrained(
         config.name_or_path,
-        torch_dtype=resolve_dtype(config.dtype),
         attn_implementation=config.attn_implementation,
         trust_remote_code=True,
+        **precision_kwarg(config),
     )
     if config.lora_rank > 0:
         from peft import LoraConfig, PeftModel, get_peft_model
@@ -116,4 +130,3 @@ def write_run_manifest(run_dir: Path, payload: dict[str, Any]) -> None:
     (run_dir / "run_manifest.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8"
     )
-

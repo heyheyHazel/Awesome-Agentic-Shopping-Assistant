@@ -116,8 +116,22 @@ def _as_conversation(messages: Sequence[Message]) -> list[dict[str, Any]]:
 
 
 def _render(tokenizer: TemplateTokenizer, conversation, tools, **kwargs) -> list[int]:
+    """Token ids for a conversation, whatever shape the chat template returns.
+
+    transformers 5 returns a dict (``input_ids`` plus ``attention_mask``) where
+    4.x returned a plain list. Iterating the dict yields its *keys*, which turns
+    every target span into zero tokens and silently produces an empty dataset
+    instead of an error, so the shape is normalised here.
+    """
     rendered = tokenizer.apply_chat_template(conversation, tools=tools or None, **kwargs)
-    return list(rendered) if not isinstance(rendered, str) else list(rendered)
+    if hasattr(rendered, "keys"):
+        rendered = rendered["input_ids"]
+    if hasattr(rendered, "tolist"):
+        rendered = rendered.tolist()
+    tokens = list(rendered)
+    if tokens and isinstance(tokens[0], (list, tuple)):
+        tokens = list(tokens[0])
+    return [int(token) for token in tokens]
 
 
 def build_turn_examples(
@@ -222,4 +236,3 @@ def write_sft_dataset(
         json.dumps(summary.to_json(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     return summary
-
