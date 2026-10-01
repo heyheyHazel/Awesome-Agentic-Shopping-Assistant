@@ -30,9 +30,9 @@ from shoprl.data.sft import build_turn_examples
 from shoprl.env.catalog import load_catalog
 from shoprl.env.local import EnvPool
 from shoprl.env.tasks import load_task_pool
-from shoprl.env.tools import ACT_SCHEMA, ACT_DESCRIPTION, RESET_DESCRIPTION
+from shoprl.env.tools import ACT_DESCRIPTION, ACT_SCHEMA, RESET_DESCRIPTION
 from shoprl.harness.context import ContextPolicy
-from shoprl.harness.rollout import EpisodeRunner, PROMPT
+from shoprl.harness.rollout import PROMPT, EpisodeRunner
 from shoprl.train.common import (
     ModelConfig,
     load_model,
@@ -118,7 +118,6 @@ def k3_kl(current, reference, mask):
     Non-negative and low variance, which matters because the reference term is
     computed once per step on the same rollouts as the reward.
     """
-    import torch
 
     delta = reference - current
     per_token = delta.exp() - delta - 1.0
@@ -261,17 +260,30 @@ class GrpoTrainer:
         return groups
 
     def _turn_samples(self, trajectory: Any) -> list[dict[str, Any]]:
-        """Turn-level training samples, keeping only turns with matching tokens."""
+        """Turn-level training samples, keeping only turns with matching tokens.
+
+        A turn is usable only when re-rendering its context reproduces the exact
+        tokens the engine sampled. If the engine and the chat template disagree
+        the sample is dropped rather than trained against a guess, so a mismatch
+        shows up as an empty sample list, not as a quiet loss of alignment.
+        """
         record = trajectory.to_json()
         examples, _rejected = build_turn_examples(
             record, self.tokenizer, tools=TOOLS, max_tokens=self.config.max_seq_len
         )
         samples = []
-        for example, target in zip(examples, record["targets"]):
+        for example in examples:
+            # Indexed by the turn the example came from, not by position: a
+            # rejected turn would otherwise shift every later pairing.
+            target = record["targets"][example.metadata["turn"]]
             sampled = target.get("token_ids")
             old_logprobs = target.get("logprobs")
-            target_span = example.labels[len(example.input_ids) - len(sampled or []) :] if sampled else []
-            if not sampled or len(sampled) != len(target_span) or sampled != target_span:
+            if not sampled:
+                continue
+            target_span = example.labels[-len(sampled) :]
+            if len(sampled) != example.metadata["target_token_count"]:
+                continue
+            if list(sampled) != list(target_span):
                 continue
             if not old_logprobs or len(old_logprobs) != len(sampled):
                 continue
@@ -365,7 +377,6 @@ class GrpoTrainer:
         return [task.task_id for task in rng.sample(tasks, count)]
 
     def _advantages(self, groups: dict[int, list[Any]]) -> tuple[StepStats, list[tuple[dict[str, Any], float]]]:
-        torch = self.torch
         stats = StepStats(step=0)
         gradients: list[tuple[dict[str, Any], float]] = []
         rewards: list[float] = []

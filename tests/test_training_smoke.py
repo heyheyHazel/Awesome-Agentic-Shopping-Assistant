@@ -12,7 +12,6 @@ no checkpoint is present, which keeps a fresh clone green.
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 
@@ -104,7 +103,7 @@ def test_training_arguments_translate_the_config(tmp_path):
     transformers = pytest.importorskip("transformers")
 
     from shoprl.train.common import ModelConfig
-    from shoprl.train.sft import SftConfig, build_training_arguments
+    from shoprl.train.sft import SftConfig, build_training_arguments, schedule_steps
 
     config = SftConfig(
         model=ModelConfig(name_or_path="unused", dtype="bfloat16", gradient_checkpointing=False),
@@ -117,10 +116,14 @@ def test_training_arguments_translate_the_config(tmp_path):
     )
     examples = 100
     arguments = build_training_arguments(config, examples)
+    warmup_steps, total_steps = schedule_steps(config, examples)
 
     steps_per_epoch = -(-examples // (config.batch_size * config.grad_accum))
     expected_total = int(steps_per_epoch * config.epochs)
-    assert arguments.warmup_steps == int(config.warmup_ratio * expected_total)
+    assert total_steps == expected_total
+    assert warmup_steps == int(config.warmup_ratio * expected_total)
+    # The same numbers the trainer writes into the run manifest.
+    assert arguments.warmup_steps == warmup_steps
     assert arguments.learning_rate == pytest.approx(2e-5)
     # transformers 5 renamed the scheduler argument away from warmup_ratio; if it
     # ever comes back this still passes, and if the constructor is fed an argument

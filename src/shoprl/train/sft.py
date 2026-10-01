@@ -93,6 +93,18 @@ def build_collator(pad_token_id: int):
     return collate
 
 
+def schedule_steps(config: SftConfig, examples: int) -> tuple[int, int]:
+    """``(warmup_steps, total_steps)`` for a run.
+
+    transformers 5 dropped ``warmup_ratio``, so the configured fraction is
+    converted here. Both numbers also land in the run manifest, which is why they
+    are computed once and returned rather than inlined.
+    """
+    steps_per_epoch = math.ceil(examples / max(1, config.batch_size * config.grad_accum))
+    total_steps = max(1, int(steps_per_epoch * config.epochs))
+    return int(config.warmup_ratio * total_steps), total_steps
+
+
 def build_training_arguments(config: SftConfig, examples: int):
     """Translate the run config into ``TrainingArguments``.
 
@@ -101,11 +113,10 @@ def build_training_arguments(config: SftConfig, examples: int):
     converted to steps here, and a test can check the translation with no
     checkpoint, no dataset and no GPU.
     """
-    from transformers import TrainingArguments
     import torch
+    from transformers import TrainingArguments
 
-    steps_per_epoch = math.ceil(examples / max(1, config.batch_size * config.grad_accum))
-    total_steps = max(1, int(steps_per_epoch * config.epochs))
+    warmup_steps, _ = schedule_steps(config, examples)
 
     # Mixed precision needs a device that supports it: asking for bf16 on a
     # CPU-only box is a hard error, and the CPU path is how this pipeline gets
@@ -118,7 +129,7 @@ def build_training_arguments(config: SftConfig, examples: int):
         gradient_accumulation_steps=config.grad_accum,
         learning_rate=config.learning_rate,
         weight_decay=config.weight_decay,
-        warmup_steps=int(config.warmup_ratio * total_steps),
+        warmup_steps=warmup_steps,
         lr_scheduler_type="cosine",
         logging_steps=config.logging_steps,
         save_steps=config.save_steps,
@@ -150,6 +161,7 @@ def train(config: SftConfig) -> dict[str, Any]:
     # LoRA adapter must not be given weight decay or its own optimizer state.
     trainable = [parameter for parameter in model.parameters() if parameter.requires_grad]
     uses_lora = config.model.lora_rank > 0
+    warmup_steps, total_steps = schedule_steps(config, len(dataset))
     arguments = build_training_arguments(config, len(dataset))
 
     trainer = Trainer(
