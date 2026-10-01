@@ -2,7 +2,7 @@ import { Bot, Globe } from 'lucide-react'
 import { useI18n } from '../i18n'
 import type { Lang } from '../i18n'
 
-const TECH = ['LangGraph', 'Multi-Agent', 'FastAPI', 'React 19', 'TypeScript']
+const TECH = ['LangGraph', 'Tool Calling', 'FastAPI', 'React 19', 'TypeScript']
 
 export default function Header() {
   const { lang, setLang, t } = useI18n()
@@ -13,7 +13,7 @@ export default function Header() {
         <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-brand to-vip text-white shadow-sm">
           <Bot size={22} />
         </span>
-        <h1 className="text-xl font-semibold tracking-tight lg:text-2xl">Multi-Agent Shopping Assistant</h1>
+        <h1 className="text-xl font-semibold tracking-tight lg:text-2xl">Agentic Shopping Assistant</h1>
       </div>
 
       <div className="flex flex-wrap items-center gap-3 lg:justify-end">

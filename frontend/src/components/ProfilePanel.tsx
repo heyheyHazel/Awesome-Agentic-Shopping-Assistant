@@ -1,8 +1,53 @@
-import { useState } from 'react'
-import { ChevronDown, Timer, Trophy } from 'lucide-react'
+import { useCallback, useMemo, useState } from 'react'
+import { ChevronDown, Shuffle, Timer, Trophy } from 'lucide-react'
 import { useI18n } from '../i18n'
 import type { ReactNode } from 'react'
 import type { ExperimentInfo, ProfileResponse, UserSummary } from '../types'
+
+// The roster holds thousands of shoppers, so the picker pages through them.
+const USER_BATCH_SIZE = 10
+
+/**
+ * Deterministic Fisher-Yates: the same list and seed always give the same order.
+ * Seeded rather than random so the page is stable across re-renders (including
+ * React's double render in development) and only changes when a new seed is set.
+ */
+function seededShuffle<T>(items: T[], seed: number): T[] {
+  const copy = [...items]
+  let state = seed * 2654435761 + 1
+  const next = () => {
+    state = (state * 1103515245 + 12345) % 2147483648
+    return state / 2147483648
+  }
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(next() * (i + 1))
+    ;[copy[i], copy[j]] = [copy[j], copy[i]]
+  }
+  return copy
+}
+
+/**
+ * One page of shoppers for the picker: a stable random sample of the roster, with
+ * the current selection forced to the front so the control always has a valid
+ * value without disturbing the rest of the page.
+ */
+function useUserBatch(users: UserSummary[], selectedId: string) {
+  const [seed, setSeed] = useState(0)
+
+  const sample = useMemo(
+    () => seededShuffle(users, seed).slice(0, USER_BATCH_SIZE),
+    [users, seed],
+  )
+
+  const batch = useMemo(() => {
+    if (sample.some((user) => user.user_id === selectedId)) return sample
+    const selected = users.find((user) => user.user_id === selectedId)
+    return selected ? [selected, ...sample.slice(0, USER_BATCH_SIZE - 1)] : sample
+  }, [sample, users, selectedId])
+
+  const reshuffle = useCallback(() => setSeed((current) => current + 1), [])
+  return { batch, reshuffle }
+}
 
 const SEGMENT_BADGES: Record<string, string> = {
   Champions: 'bg-amber-50 text-amber-600',
@@ -98,6 +143,7 @@ export default function ProfilePanel({
   const { t, fill, segment, category } = useI18n()
   const [expanded, setExpanded] = useState(false)
   const person = profile?.profile
+  const { batch, reshuffle } = useUserBatch(users, userId)
   const slowest = timings
     ? Object.entries(timings)
         .sort((a, b) => b[1] - a[1])
@@ -107,19 +153,30 @@ export default function ProfilePanel({
   return (
     <aside className="flex flex-col gap-4">
       <div className="card p-4">
-        <div className="flex items-center justify-between">
-          <p className="section-label">{t('profile_title')}</p>
-          <select
-            value={userId}
-            onChange={(event) => onUserChange(event.target.value)}
-            className="rounded-lg border border-line bg-card px-2 py-1 text-[11px] font-medium text-muted outline-none focus:border-brand/50"
-          >
-            {users.map((user) => (
-              <option key={user.user_id} value={user.user_id}>
-                {user.name}
-              </option>
-            ))}
-          </select>
+        <div className="flex items-center justify-between gap-2">
+          <p className="section-label shrink-0">{t('profile_title')}</p>
+          <div className="flex min-w-0 items-center gap-0.5 rounded-full border border-line bg-card p-0.5 pl-2">
+            <select
+              value={userId}
+              onChange={(event) => onUserChange(event.target.value)}
+              className="w-[104px] truncate bg-transparent text-[11px] font-semibold text-muted outline-none"
+            >
+              {batch.map((user) => (
+                <option key={user.user_id} value={user.user_id}>
+                  {user.tier === 'VIP' ? `${user.name} · VIP` : user.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              title={t('users_shuffle')}
+              aria-label={t('users_shuffle')}
+              onClick={reshuffle}
+              className="shrink-0 rounded-full p-1 text-faint transition hover:bg-slate-100 hover:text-brand"
+            >
+              <Shuffle size={12} />
+            </button>
+          </div>
         </div>
 
         {person ? (

@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentic-shopping-assistant"
+version = "3.0.0"
+description = "One tool-calling shopping agent over a 23k-product catalogue"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+dependencies = [
+  "fastapi>=0.141",
+  "uvicorn>=0.53",
+  "pydantic>=2.13",
+  "pydantic-settings>=2.15",
+  "python-dotenv>=1.2",
+  "structlog>=26.1",
+  "httpx>=0.28",
+  "numpy>=2.5",
+  "rapidfuzz>=3.9",
+  "onnxruntime>=1.24",
+  "tokenizers>=0.22",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9.1", "pytest-asyncio>=1.4", "ruff>=0.9"]
+# Training only. Kept out of the serving install: a deployment does not need a
+# 2 GB CUDA stack, and the harness and environment both run on CPU without it.
+train = [
+  "torch>=2.5",
+  "transformers>=4.51",
+  "peft>=0.13",
+  "accelerate>=1.0",
+  "bitsandbytes>=0.44; platform_system == 'Linux'",
+]
+# Rollout throughput; optional because vLLM pins its own torch build.
+train-vllm = ["vllm>=0.8"]
+
+[project.scripts]
+shopping-assistant = "shopping_assistant.api.app:run"
+shoprl = "shoprl.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

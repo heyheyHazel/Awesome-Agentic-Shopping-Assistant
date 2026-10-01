@@ -5,7 +5,6 @@ import type { StringKey } from '../i18n'
 import type { FeedItem } from '../types'
 import MessageBubble, { UserBubble } from './MessageBubble'
 import ProductCards from './ProductCards'
-import InventoryMessage from './InventoryMessage'
 
 const SUGGESTIONS: StringKey[] = ['suggest_1', 'suggest_2', 'suggest_3']
 
@@ -127,9 +126,14 @@ export default function ChatPanel({
                   />
                 )
               case 'products':
-                return <ProductCards key={item.id} products={item.products} formatPrice={formatPrice} />
-              case 'inventory':
-                return <InventoryMessage key={item.id} items={item.items} time={item.time} />
+                return (
+                  <ProductCards
+                    key={item.id}
+                    products={item.products}
+                    stock={item.stock}
+                    formatPrice={formatPrice}
+                  />
+                )
             }
           })
         )}

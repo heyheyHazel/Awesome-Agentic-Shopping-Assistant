@@ -74,16 +74,15 @@ export interface MetaInfo {
 
 // ── SSE payloads ──────────────────────────────────────────────────────
 
-export interface AgentEvent {
-  agent: string
+export interface ToolEvent {
+  tool: string
   status: 'running' | 'done'
   message: string
 }
 
-export interface PlanEvent {
-  intent: 'product_search' | 'general'
-  reply: string
-  variant: string
+/** SSE payload for the products the agent chose to present. */
+export interface ProductsEvent {
+  products: Product[]
 }
 
 export interface InventoryEvent {
@@ -103,5 +102,7 @@ export type AgentStatus = 'idle' | 'running' | 'done'
 export type FeedItem =
   | { kind: 'user'; id: string; text: string; time: string }
   | { kind: 'agent'; id: string; agent: string; text: string; time: string; streaming?: boolean }
-  | { kind: 'products'; id: string; products: Product[]; time: string }
-  | { kind: 'inventory'; id: string; items: InventoryItem[]; summary: string; time: string }
+  // Stock is attached to the cards rather than shown as its own message: the agent
+  // checks stock before it presents, so a standalone bubble would appear before any
+  // product is on screen and read as if it came out of nowhere.
+  | { kind: 'products'; id: string; products: Product[]; time: string; stock?: InventoryItem[] }

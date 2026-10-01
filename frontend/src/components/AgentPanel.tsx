@@ -1,21 +1,27 @@
-import { Network, PenLine, PackageCheck, Sparkles } from 'lucide-react'
+import { Bot, PackageCheck, Search, Sparkles, UserRound } from 'lucide-react'
 import { useI18n } from '../i18n'
 import type { StringKey } from '../i18n'
 import type { LucideIcon } from 'lucide-react'
 import type { AgentStatus } from '../types'
 
-interface AgentCard {
+interface ToolCard {
   key: string
   name: StringKey
   desc: StringKey
   icon: LucideIcon
 }
 
-const AGENTS: AgentCard[] = [
-  { key: 'supervisor', name: 'agent_supervisor', desc: 'agent_supervisor_desc', icon: Network },
-  { key: 'recommendation', name: 'agent_recommendation', desc: 'agent_recommendation_desc', icon: Sparkles },
-  { key: 'copywriting', name: 'agent_copywriting', desc: 'agent_copywriting_desc', icon: PenLine },
-  { key: 'inventory', name: 'agent_inventory', desc: 'agent_inventory_desc', icon: PackageCheck },
+/**
+ * The agent is one tool-calling loop; everything else it can reach is a deterministic
+ * tool. The keys are the tool names the backend reports, so the panel lights up from
+ * real calls rather than from a scripted sequence.
+ */
+const PANEL: ToolCard[] = [
+  { key: 'assistant', name: 'tool_assistant', desc: 'tool_assistant_desc', icon: Bot },
+  { key: 'search_catalog', name: 'tool_search', desc: 'tool_search_desc', icon: Search },
+  { key: 'get_shopper_profile', name: 'tool_profile', desc: 'tool_profile_desc', icon: UserRound },
+  { key: 'check_inventory', name: 'tool_inventory', desc: 'tool_inventory_desc', icon: PackageCheck },
+  { key: 'present_recommendation', name: 'tool_present', desc: 'tool_present_desc', icon: Sparkles },
 ]
 
 function StatusDot({ status }: { status: AgentStatus }) {
@@ -34,19 +40,35 @@ function StatusDot({ status }: { status: AgentStatus }) {
   )
 }
 
-export default function AgentPanel({ states }: { states: Record<string, AgentStatus> }) {
+export default function AgentPanel({
+  states,
+  order,
+}: {
+  states: Record<string, AgentStatus>
+  order: string[]
+}) {
   const { t } = useI18n()
+
+  // Cards follow the order the tools were actually called in this turn, so the panel
+  // reads as the sequence of steps rather than a fixed list the calls do not match.
+  // Anything not called yet keeps its default slot, underneath.
+  const rank = (key: string) => {
+    const index = order.indexOf(key)
+    return index === -1 ? order.length + PANEL.findIndex((entry) => entry.key === key) : index
+  }
+  const ordered = [...PANEL].sort((a, b) => rank(a.key) - rank(b.key))
 
   return (
     <aside className="flex flex-col gap-4">
-      <p className="section-label px-1">{t('agents_label')}</p>
+      <p className="section-label px-1">{t('tools_label')}</p>
       <div className="flex flex-col gap-3">
-        {AGENTS.map((agent) => {
-          const status = states[agent.key] ?? 'idle'
-          const Icon = agent.icon
+        {ordered.map((tool) => {
+          const status = states[tool.key] ?? 'idle'
+          const step = order.indexOf(tool.key)
+          const Icon = tool.icon
           return (
             <div
-              key={agent.key}
+              key={tool.key}
               className={`card p-3.5 transition ${
                 status === 'running' ? 'border-warning/40 ring-2 ring-warning/15' : ''
               }`}
@@ -63,10 +85,11 @@ export default function AgentPanel({ states }: { states: Record<string, AgentSta
                 >
                   <Icon size={16} />
                 </span>
-                <p className="flex-1 text-sm font-semibold leading-tight">{t(agent.name)}</p>
+                <p className="flex-1 text-sm font-semibold leading-tight">{t(tool.name)}</p>
+                {step >= 0 && <span className="text-[10px] font-semibold text-faint">{step + 1}</span>}
                 <StatusDot status={status} />
               </div>
-              <p className="mt-2 text-xs leading-relaxed text-muted">{t(agent.desc)}</p>
+              <p className="mt-2 text-xs leading-relaxed text-muted">{t(tool.desc)}</p>
             </div>
           )
         })}

@@ -2,15 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchExperiment, fetchProfile, streamChat } from '../api'
 import type { Lang } from '../i18n'
 import type {
-  AgentEvent,
   AgentStatus,
   DoneEvent,
   ExperimentInfo,
   FeedItem,
   InventoryEvent,
-  PlanEvent,
+  InventoryItem,
+  ProductsEvent,
   ProfileResponse,
-  Product,
+  ToolEvent,
 } from '../types'
 
 function now(): string {
@@ -35,6 +35,9 @@ export function useAgentStream(userId: string, language: Lang) {
   const [latencyMs, setLatencyMs] = useState<number | null>(null)
   const [timings, setTimings] = useState<Record<string, number> | null>(null)
   const [isStreaming, setIsStreaming] = useState(false)
+  // Tool names in the order they were first called this turn, so the panel can show
+  // the real sequence instead of a fixed order that the calls do not follow.
+  const [toolOrder, setToolOrder] = useState<string[]>([])
 
   const threadRef = useRef<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
@@ -62,6 +65,7 @@ export function useAgentStream(userId: string, language: Lang) {
 
       setFeed((prev) => [...prev, { kind: 'user', id: nextId(), text: text.trim(), time: now() }])
       setAgentStates({})
+      setToolOrder([])
       setLatencyMs(null)
       setTimings(null)
       setIsStreaming(true)
@@ -69,6 +73,8 @@ export function useAgentStream(userId: string, language: Lang) {
       const controller = new AbortController()
       abortRef.current = controller
       let assistantId: string | null = null
+      // Stock reported by check_inventory, held until the cards it belongs to arrive.
+      let pendingStock: InventoryItem[] | undefined
 
       try {
         await streamChat(
@@ -78,18 +84,13 @@ export function useAgentStream(userId: string, language: Lang) {
               case 'session':
                 threadRef.current = (data as { thread_id: string }).thread_id
                 break
-              case 'agent': {
-                const payload = data as AgentEvent
-                setAgentStates((prev) => ({ ...prev, [payload.agent]: payload.status }))
-                break
-              }
-              case 'plan': {
-                const payload = data as PlanEvent
-                if (payload.intent === 'product_search') {
-                  setFeed((prev) => [
-                    ...prev,
-                    { kind: 'agent', id: nextId(), agent: 'supervisor', text: payload.reply, time: now() },
-                  ])
+              case 'tool': {
+                const payload = data as ToolEvent
+                setAgentStates((prev) => ({ ...prev, [payload.tool]: payload.status }))
+                if (payload.status === 'running') {
+                  setToolOrder((prev) =>
+                    prev.includes(payload.tool) ? prev : [...prev, payload.tool],
+                  )
                 }
                 break
               }
@@ -102,19 +103,20 @@ export function useAgentStream(userId: string, language: Lang) {
                 break
               }
               case 'products': {
-                const payload = data as { products: Product[] }
+                const payload = data as ProductsEvent
+                // Capture before clearing: a functional setFeed runs during the next
+                // render, by which time `pendingStock` would already be undefined.
+                const stock = pendingStock
+                pendingStock = undefined
                 setFeed((prev) => [
                   ...prev,
-                  { kind: 'products', id: nextId(), products: payload.products, time: now() },
+                  { kind: 'products', id: nextId(), products: payload.products, time: now(), stock },
                 ])
                 break
               }
               case 'inventory': {
                 const payload = data as InventoryEvent
-                setFeed((prev) => [
-                  ...prev,
-                  { kind: 'inventory', id: nextId(), items: payload.items, summary: payload.summary, time: now() },
-                ])
+                pendingStock = payload.items
                 break
               }
               case 'experiment':
@@ -179,9 +181,21 @@ export function useAgentStream(userId: string, language: Lang) {
     threadRef.current = null
     setFeed([])
     setAgentStates({})
+    setToolOrder([])
     setLatencyMs(null)
     setTimings(null)
   }, [])
 
-  return { feed, agentStates, profile, experiment, latencyMs, timings, isStreaming, send, newChat }
+  return {
+    feed,
+    agentStates,
+    toolOrder,
+    profile,
+    experiment,
+    latencyMs,
+    timings,
+    isStreaming,
+    send,
+    newChat,
+  }
 }

@@ -15,7 +15,7 @@ export default function App() {
   const [users, setUsers] = useState<UserSummary[]>([])
   const [meta, setMeta] = useState<MetaInfo | null>(null)
   const [userId, setUserId] = useState('U001')
-  const { feed, agentStates, profile, experiment, latencyMs, timings, isStreaming, send, newChat } =
+  const { feed, agentStates, toolOrder, profile, experiment, latencyMs, timings, isStreaming, send, newChat } =
     useAgentStream(userId, lang)
 
   useEffect(() => {
@@ -51,7 +51,7 @@ export default function App() {
 
         <main className="grid min-h-0 flex-1 items-stretch gap-5 lg:grid-cols-[300px_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)_320px]">
           <div className="scroll-slim order-2 lg:order-1 lg:h-full lg:overflow-y-auto lg:pr-1">
-            <AgentPanel states={agentStates} />
+            <AgentPanel states={agentStates} order={toolOrder} />
           </div>
 
           <div className="order-1 min-h-0 lg:order-2 lg:h-full">

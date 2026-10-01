@@ -1,142 +1,112 @@
-# 架构设计文档
+# Agentic Shopping Assistant · 架构设计
 
-本文档描述 v2 架构：LangGraph 动态调度 + 并行 Agent 流水线 + SSE 实时流。
+## 1. 系统总览
 
-## 1. 运行时拓扑
+一个 tool-calling agent + 四个确定性工具。
 
 ```
-浏览器 (React 19)
-  │  POST /api/v1/chat (SSE)
+用户消息
+  │
   ▼
-FastAPI (python/main.py)
-  │  graph.astream(stream_mode=["custom", "updates"])
+FastAPI (src/shopping_assistant/api/app.py)
+  │  会话 id / A/B 分桶 / SSE 帧封装 / 按工具分解耗时
   ▼
-LangGraph 状态图 (python/orchestrator/graph.py)
-  ├── SupervisorAgent   LLM 结构化输出 → 意图 + 检索参数
-  ├── UserProfileAgent  确定性分位 RFM 计算
-  ├── ProductRecAgent   目录召回 + LLM 排序与文案
-  ├── InventoryAgent    库存规则
-  └── ChatAgent         create_agent 工具调用
-      │
-      ▼
-OpenAI 兼容 LLM API（DeepSeek / OpenAI / …）
+ShoppingAgent (src/shopping_assistant/agent/shopping_agent.py)          ← 唯一的 LLM 循环
+  │
+  ├── get_shopper_profile(user_id)      分位 RFM 画像（确定性）
+  ├── search_catalog(query, …)           混合召回 + 预算/类目硬过滤（确定性）
+  ├── check_inventory(product_ids)       库存 + 限购（确定性）
+  └── present_recommendation(ids)        发出商品卡片（确定性）
+        │
+        ▼
+  每轮把 language + user_id 拼进 system prompt
+        │
+        ▼
+  OpenAI 兼容 LLM API（DeepSeek / OpenAI / …）
 ```
 
-## 2. 图结构
+**意图判断、query 改写、选品、写文案都由这个循环完成**——前两者体现在它填工具参数，后两者体现在它写最终回答。工具只负责模型没法凭空知道的事。
+
+## 2. 一次购物咨询的事件流
 
 ```
-START → supervisor                                    ← LLM ①
-          ├─ general        → assistant → END
-          └─ product_search → profile → recall → inventory → filter
-                                                              │
-                                ┌─────────────────────────────┴──────────┐
-                      候选非空  │                                        │ 无匹配
-                                ▼                                        ▼
-                      recommend → respond → END                  respond → END
-                       ↑ LLM ②
+session → experiment
+        → tool(assistant, running)
+        → tool(search_catalog, running/done)
+        → tool(get_shopper_profile, running/done)   ← 顺序与是否调用由模型决定
+        → tool(check_inventory, running/done)
+        → tool(present_recommendation, running/done)
+        → products                                   ← 卡片数据来自这个工具的返回
+        → inventory
+        → token × N                                  ← 最终回答
+        → done {latency_ms, timings}
 ```
 
-关键设计：
+### 关键设计：卡片只来自工具的返回
 
-- **每轮两次 LLM 调用**：查询理解（`supervisor`）与排序 + 文案（`recommend`）。其余节点是确定性代码，实测每项 0.0–1.4 ms
-- **单链而非扇出**：确定性节点串成一条直线——它们都是毫秒级，并行不会更快。更重要的是，LangGraph 中一个有多条不同层级入边的节点会**每个超步执行一次**；把 `profile → filter` 与 `inventory → filter` 分开连（`inventory` 比 `profile` 晚一个超步完成）会让下游 LLM 调用静默翻倍（`tests/test_graph.py` 的调用计数测试守住这一点）
-- **单调收窄**：`candidates` 从召回开始逐级收窄（库存过滤 → 候选上限），排序前就剔除缺货商品，不让模型为买不到的东西花一次调用
-- **条件跳过**：`filter` 后候选为空时直接进入 `respond`，省掉整次排序调用
+`products` 事件的载荷是 `present_recommendation` 的真实返回，**不是从模型措辞里解析出来的**。如果把模型文案里的商品渲染成卡片，用户说「200 元以内」就可能在卡片上看到超预算的东西，或者模型说「四款」而界面只有三张卡。工具是唯一的真相来源，模型只负责叙述。
 
-## 3. 图状态（GraphState）
+同理，售罄商品在 `search_catalog` 内部就被剔除；预算与类目作为工具参数传入后由 `retrieval/recall.py` 强制执行，并在出口再校验一次。
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `messages` | `Annotated[list[AnyMessage], add_messages]` | 对话历史，随 Checkpointer 持久化 |
-| `user_id` / `query` | `str` | 当前请求上下文 |
-| `plan` | `dict` | SupervisorPlan 序列化结果 |
-| `profile` | `UserProfile \| None` | 画像节点输出 |
-| `candidates` | `list[Product]` | 召回候选，经库存过滤与候选上限逐级收窄 |
-| `inventory` / `available_ids` | 列表 | 库存节点输出 |
-| `pitches` | `list[CopyItem]` | 排序调用同时产出的推荐语 |
-| `final_products` | `list[Product]` | 聚合后的展示商品 |
-| `reply` | `str` | 本轮回复文本 |
-| `timings` | `Annotated[dict, merge_dicts]` | 各节点耗时，使用自定义 reducer 合并并行写入 |
+### 助手文本为什么要缓冲
 
-`supervisor_node` 每轮会重置所有瞬态字段（profile / candidates / …），避免上一轮的残留数据污染本轮。
+一次购物咨询会产生多个 model 消息：调用工具前的「工作笔记」和最后的回答。直接把所有 token 流推给用户，会看到「I'll look up the shopper's profile and search the catalog…」这种内心独白。所以 `ShoppingAgent` 只在**最后一个没有工具调用的 assistant 消息**上放 token 事件：前言随工具调用一起被丢掉。事件顺序由 `AgentLoop(emit=...)` 的调用顺序决定，落盘的 `Trajectory` 里仍然保留完整记录，包括那些没给用户看的前言。
 
-## 4. 节点职责与事件
-
-| 节点 | LLM | 发出事件 | 失败降级 |
-|------|-----|----------|----------|
-| `supervisor` | 结构化计划 | `agent`(×2), `plan`, `experiment` | 计划回退为 general + 请用户重述 |
-| `assistant` | 工具调用流式 | `agent`(×2), `token` | 节点内捕获异常，输出错误提示 |
-| `profile` | 确定性 | `agent`(×2), `profile` | 无画像继续（排序按通用规则） |
-| `recall` | 确定性 | `agent`(running) | 约束全不命中时返回空列表，**不**放宽预算/类目 |
-| `inventory` | 确定性 | `agent`(×2) | 输出超时则跳过库存过滤 |
-| `filter` | 确定性 | — | 候选为空则不进入排序 |
-| `recommend` | 结构化：排序 + 文案 | `agent`(×2) | 返回空结果，`respond` 回退到候选顺序 |
-| `respond` | — | `products`, `inventory`, `agent`(×2), `token` | 无商品时不发 token |
-
-`respond` 不发 LLM 调用：它在发出 `products` 与 `inventory` 后，把 `recommend` 已经写好的推荐语分块作为 `token` 事件推给前端，保证聊天内消息顺序为：商品卡片 → 库存 → 逐字推荐语。
-
-## 5. 计划与路由
-
-`SupervisorAgent` 用 `JsonStructured` 让 LLM 输出 `SupervisorPlan`：
-
-```json
-{
-  "intent": "product_search | general",
-  "reply": "一句即时确认，如 Got it! Here are the best running shoes for you.",
-  "search": { "keywords": [], "category": "", "brand": "", "min_price": null, "max_price": 120 }
-}
-```
-
-- `route_supervisor`：`intent=general` → `assistant`，否则走 `profile` 起头的确定性流水线
-- `route_filter`：候选非空 → `recommend`，否则直接 `respond`
-- 计划里不再有 `agents` 枚举：哪些阶段能省由代码决定（候选为空就跳过排序），不需要模型判断
-- `catalog_language_rule()` 依据**实际加载的商品类目**推断检索词语言（ShopSimulator 中文目录 vs 内置英文演示目录），不再写死英文
-
-## 6. 流式协议
-
-FastAPI 将 LangGraph 的两种流映射为 SSE：
+## 3. 工具契约
 
 ```python
-async for mode, chunk in graph.astream(inputs, config=config, stream_mode=["custom", "updates"]):
-    if mode == "custom":   yield _sse(chunk["type"], chunk)     # 业务事件
-    else:                  merge timings from chunk              # 状态增量
-yield _sse("done", {"latency_ms": ..., "timings": {...}})
+def search_catalog(query: str, keywords: list[str] | None = None, category: str = "",
+                   min_price: float | None = None, max_price: float | None = None,
+                   limit: int = 8) -> str
+
+# 声明给模型的那一份是 JSON Schema，写在 build_tool_registry() 里
 ```
 
-- 节点通过 `get_stream_writer()` 发出 custom 事件（`emit()` 封装，非流式 `ainvoke` 下自动静默）
-- token 只有两个来源：`assistant`（工具调用 Agent 的真实流式输出）与 `respond`（分块推送已生成的推荐语）；结构化调用的中间 token 不会泄漏到前端
+- 返回给模型的是紧凑的文本行（`id | 名称 | 类目 | 价格 | 评分 | 店铺 | 标签`），模型能直接读
+- 工具自己通过 `services/events.py` 的 `emit()` 发事件；`get_stream_writer()` 在非图执行环境（单测、脚本）下自动静默，所以工具仍可直接调用与测试
+- `present_recommendation` 的返回值会明确告诉模型「实际展示了哪几件」，若被上限截断也会说明——否则模型会继续描述用户看不见的商品
 
-前端 `useAgentStream` 的顺序处理：
+## 4. LLM 调用次数
 
-```
-session → (agent 状态更新 | plan → Supervisor 气泡) → profile(右栏)
-        → products(卡片) → inventory(气泡)
-        → token(逐字追加到 Assistant 气泡) → done(耗时)
-```
+| 场景 | 调用次数 |
+|------|----------|
+| 通用问答（不调工具） | **1** |
+| 购物咨询（搜索 → 呈现） | 2–3 |
+| 购物咨询（+ 画像 / 库存查验） | 3–4 |
 
-## 7. 稳定性设计
+实测（DeepSeek）：通用问答 1.2–1.6s，购物咨询 3.5–4.3s，模型多搜几次时可达 8s。**旧的流水线架构固定 4 次链式调用、11.1s**；现在次数由任务复杂度决定。
+
+## 5. 与多 Agent 方案的对比（为什么最终选了单 Agent）
+
+| 方案 | 购物咨询 LLM 调用 | 通用问答 | 确定性保证 | 代码面 |
+|------|------------------|----------|-----------|--------|
+| 多 Agent 流水线（旧） | 4（固定） | 2 | 强 | 5 个 Agent + LangGraph 状态图 |
+| 单 Agent + 工具（现） | 2–4（自适应） | **1** | 强（约束在工具里） | 1 个 Agent + 4 个工具 |
+
+放弃多 Agent 的依据是实测，不是偏好：
+
+1. **没有可并行的东西**。旧版把 `rerank ∥ inventory` 并行，但 inventory 是纯内存遍历（0.9ms），一次 LLM 调用是 1–2s——并行一毫秒也省不到。
+2. **任务本身简单**。不需要多 Agent 间的协商与 handoff，只需要「查数据 → 选品 → 说话」。
+3. **旧的文案 Agent 是净负债**。它和最终总结在写同一批商品的同一段话，用户看到两个气泡说同一件事。
+
+## 6. 稳定性设计
 
 | 机制 | 实现 | 参数 |
 |------|------|------|
-| 超时熔断 | `BaseAgent` 中 `asyncio.wait_for` 包裹 `_execute` | 默认 8s，LLM 节点 25s，对话 45s |
+| 超时熔断 | `ECOM_LLM_REQUEST_TIMEOUT` 传给 httpx 客户端；工具本身是纯函数，不会挂住 | 默认 60s |
 | 指数退避重试 | `tenacity`（0.5s 起步，上限 4s） | 2 次尝试 |
-| 降级 | 每个 Agent 覆写 `_fallback()` | 见第 4 节表格 |
+| 降级 | 每个 Agent 覆写 `_fallback()` | 返回失败结果，调用方继续 |
+| 召回降级 | 索引缺失 / 目录变化 / 模型未下载 | 自动回落纯关键词召回 |
 | 请求级兜底 | `/api/v1/chat` 捕获异常发 `error` 事件 | 保证 SSE 正常结束 |
-
-## 8. 会话记忆
-
-- `build_graph()` 默认挂载 `InMemorySaver`（可注入其他 Checkpointer）
-- 会话由请求里的 `thread_id` 标识；前端首次请求拿到 `session` 事件后复用，点击「New chat」即丢弃
-- 多轮上下文（如「cheaper ones」）由 Supervisor 读取 `messages` 历史解析
-
-## 9. A/B 测试
+| 工具参数校验 | `search_catalog` 的 limit 夹紧；`present_recommendation` 丢弃不存在的 id | 模型编造的 id 不会进卡片 |
+## 7. A/B 测试
 
 - **分桶**：`md5(user_id + experiment_id) % n_variants`，同一用户永远在同一实验组（`ABTestEngine.assign`）
 - **动态调权**：`sample()` 从各组 Beta 后验采样取最大（Thompson Sampling）
 - **记录结果**：`POST /api/v1/experiments/outcome` 更新后验
 - 演示数据预置 A(313/186)、B(370/128)，显示转化率 62.7% / 74.3%
 
-## 10. RFM 与客群规则
+## 8. RFM 与客群规则
 
 分数是**相对客群的分位排名**，不是绝对分数——20 单在「中位数 4 单」的客群里是高频客户，在「中位数 40 单」的客群里只是普通客户，所以绝对阈值一旦换数据集就会退化（实测在 4009 个真实用户上，旧公式把 78% 的人塞进同一个客群，且 `New` 恒为 0）。
 
@@ -158,37 +128,38 @@ overall   = 0.3·recency + 0.3·frequency + 0.4·monetary
 
 顺序很重要：正向信号优先于流失判定，否则一个刚沉默不久的高频客户会被判成 At Risk。
 
-## 11. 多语言（i18n）
+## 9. 多语言（i18n）
 
 - 前端 `src/i18n.ts` 保存全部界面文案词典与类目/标签/客群映射；`i18n-provider.tsx` 提供 `useI18n()` hook
 - 语言优先级：URL `?lang=zh` > `localStorage` > 默认 `en`；切换时写入 `localStorage` 与 `<html lang>`
 - 每个聊天请求携带 `language` 字段：
-  - 调度 / 回复 / 通用问答的 system prompt 追加 `language_directive()`
-  - 调度 Agent 额外收到 `catalog_language_rule()`，它按实际加载类目是否含中文来要求 `search.keywords` / `search.category` 使用对应语言（ShopSimulator 中文目录 vs 内置英文演示目录）
+  - `ShoppingAgent` 每轮把这些拼进 system prompt（`language_directive()` 与当前 shopper id），两者都属于**请求**而非 Agent，所以同一份配置能同时服务所有用户与语言
+  - `catalog_language_rule()` 写进 Agent 的固定 system prompt，它按实际加载类目是否含中文来判断该用哪种语言写 `query` 与 `keywords`（ShopSimulator 中文目录 vs 内置英文演示目录）
 - 商品型号保留英文，类目、标签、库存状态、A/B 文案等均由前端词典翻译
 
-## 12. 前端数据流
+## 10. 前端数据流
 
 ```
 useAgentStream(userId)
-  ├── feed          → ChatPanel（user / agent / products / inventory 四种块）
-  ├── agentStates   → AgentPanel（idle / running / done 状态灯）
-  ├── profile       → ProfilePanel 画像 + RFM 聚类
-  ├── experiment    → ProfilePanel A/B 面板
-  └── latencyMs/timings → ProfilePanel 响应耗时卡片
+  ├── feed        → ChatPanel（user / agent / products / inventory 四种块）
+  ├── toolStates  → AgentPanel（每个工具的 idle / running / done 状态灯）
+  ├── profile     → ProfilePanel 画像 + RFM
+  ├── experiment  → ProfilePanel A/B 面板
+  └── latencyMs/timings → ProfilePanel 响应耗时卡片（按工具分解）
 ```
 
-用户切换时重新拉取画像与实验数据并重置会话；所有流式写入都在单个 `send()` 的事件回调中完成。
+`tool` 事件用工具名作为 key（`search_catalog` / `get_shopper_profile` / `check_inventory` / `present_recommendation` / `assistant`），左栏卡片就从真实的工具调用点亮，没有脚本化的假动画。
 
-## 13. 扩展点
+## 11. 扩展点
 
-- **新增 Agent**：实现 `BaseAgent` 子类 → 在图中注册节点与边。如果它需要 LLM，先想清楚能否并入 `supervisor` 或 `recommend`——每多一个 LLM 节点就多一次秒级往返
-- **新增工具**：在 `chat_agent.py` 用 `@tool` 装饰函数并加入 `create_agent` 的 tools 列表
-- **持久化记忆**：把 `build_graph()` 的 checkpointer 换成 `SqliteSaver` / Postgres 实现
-- **换数据源**：`ECOM_DATA_SOURCE=auto|real|mock`（见 `data/store.py`）；拉取脚本见 `scripts/fetch_data.py`
-- **可观测性**：设置 `LANGSMITH_TRACING=true` 即获得全链路追踪
+- **新增工具**：在 `agent/tools.py` 写一个普通函数，在 `build_tool_registry()` 里加一条 `ToolSpec`（名字 + 描述 + JSON Schema），然后在 `shopping_agent.py` 的 system prompt 里说明什么时候用它。写进 UI 的载荷一律通过 `emit()` 从工具的真实返回发出。
+- **新增确定性能力**：写一个纯函数并注册成工具，**不要为了它新增 LLM 节点**——那会多一次秒级往返。
+- **持久化记忆**：把 `ShoppingAgent` 的 `_sessions` 换成 Redis/SQLite 实现；需要落盘的只是 `Session.messages` 与 `Session.memory`。
+- **换数据源**：`ECOM_DATA_SOURCE=auto|real|mock`（见 `catalog/store.py`）；拉取脚本见 `scripts/fetch_data.py`。
+- **换召回策略**：`retrieval/recall.py` 的 `recall_products` 是唯一入口，关键词与语义两路各自排序后用 RRF 融合；加第三路只需要多传一个 ranking 给它。
+- **可观测性**：每一轮都产出 `Trajectory`，里面含每个 step 发给模型的**完整 prompt**、工具返回值、耗时与终止原因；训练侧的采集脚本直接消费同一结构。
 
-## 14. 召回与语义索引
+## 12. 召回与语义索引
 
 ```
 用户查询 ──┬─► 硬过滤（预算 / 类目 / 品牌）→ eligible
@@ -206,3 +177,12 @@ useAgentStream(userId)
 **索引失效策略**：索引以 `product_id` 为行的连接键。加载时校验 id 集合与当前目录是否一致，不一致就视为不存在（回落关键词召回）。这样换数据集不会静默排错行，代价是必须重跑 `scripts/build_index.py`。
 
 **没有相似度阈值**：实测在真实目录上不可分（应命中 top-1 最低 0.600，应不命中最高 0.602；换成 z 分数同样重叠）。因此「没有合适商品」的判定交给 `recommend` 的结构化输出——返回空 `product_ids` 即为刻意判空，此时 `respond` 不发商品事件也不发库存事件，前端显示「没有符合条件的商品」。注意这与调用失败不同：`_fallback` 的 `success=False` 仍会回落到候选顺序。
+
+## 13. 会话记忆
+
+- 会话由请求里的 `thread_id` 标识；前端首次请求拿到 `session` 事件后复用，点击「New chat」即丢弃
+- `ShoppingAgent` 为每个 `thread_id` 保存一个 `Session`：对话记录（不含 system prompt）+ 记忆笔记 + 一把锁（同一会话的并发请求串行执行）
+- 多轮上下文（如「cheaper ones」）由 agent 自己读取历史解析，不再有单独的「计划」步骤
+- **上下文裁剪**由 `ContextPolicy` 负责：旧的工具结果替换成占位符（保留最近 3 条），整步裁剪只在超预算时发生，且永远保留最新一步。裁剪只作用于**发给模型的副本**，落盘的记录始终完整
+- **记忆笔记**是 `Memory`：模型可通过 `save_note` 写下约束（「预算 500」「必须黑色」），它以 pinned system block 的形式插在 system prompt 之后——剪枝剪不到它
+- 语言与 shopper id 每轮拼进 system prompt，不写进对话记录，所以同一份配置能同时服务所有用户与语言
