@@ -79,6 +79,53 @@ def group_advantages(rewards: list[float], *, eps: float = 1e-6) -> list[float]:
     return [(value - mean) / (deviation + eps) for value in rewards]
 
 
+def gather_token_logprobs(logits, input_ids):
+    """Log-probability of every token given the tokens before it.
+
+    The last position predicts nothing and the first token has no predecessor, so
+    the returned tensor is ``input_ids`` shifted by one.
+    """
+    import torch
+
+    logprobs = torch.log_softmax(logits.float()[:, :-1], dim=-1)
+    targets = input_ids[:, 1:].unsqueeze(-1)
+    return logprobs.gather(-1, targets).squeeze(-1)
+
+
+def clipped_policy_loss(current, old, advantage, mask, *, clip_low: float = 0.2, clip_high: float = 0.28):
+    """GRPO's clipped surrogate, averaged over the tokens that count.
+
+    ``current`` and ``old`` are the log-probabilities of the *same* sampled tokens
+    under the policy being updated and under the policy that produced them, so
+    their difference is the log importance ratio. The clip is asymmetric, which
+    lets an update capture more of a good move than of a bad one.
+    """
+    import torch
+
+    ratio = (current - old).exp()
+    if not torch.is_tensor(advantage):
+        advantage = torch.full_like(ratio, float(advantage))
+    unclipped = ratio * advantage
+    clipped = ratio.clamp(1.0 - clip_low, 1.0 + clip_high) * advantage
+    per_token = -torch.min(unclipped, clipped)
+    weights = mask.to(per_token.dtype)
+    return (per_token * weights).sum() / weights.sum().clamp_min(1.0)
+
+
+def k3_kl(current, reference, mask):
+    """Schulman's k3 estimator of KL(current || reference), per token.
+
+    Non-negative and low variance, which matters because the reference term is
+    computed once per step on the same rollouts as the reward.
+    """
+    import torch
+
+    delta = reference - current
+    per_token = delta.exp() - delta - 1.0
+    weights = mask.to(per_token.dtype)
+    return (per_token * weights).sum() / weights.sum().clamp_min(1.0)
+
+
 @dataclass(slots=True)
 class GrpoConfig:
     model: ModelConfig
@@ -241,46 +288,38 @@ class GrpoTrainer:
 
     # ── objective ─────────────────────────────────────────────────────
 
-    def _logprobs(self, input_ids: list[int], loss_mask: list[int]):
-        """Per-position log-probabilities of the given tokens under the policy."""
-        torch = self.torch
-        tensor = torch.tensor([input_ids], device=self.model.device)
-        logits = self.model(tensor).logits.float()[:, :-1]
-        logprobs = torch.log_softmax(logits, dim=-1)
-        targets = tensor[:, 1:].unsqueeze(-1)
-        gathered = logprobs.gather(-1, targets).squeeze(-1)[0]
-        mask = torch.tensor([loss_mask], device=self.model.device, dtype=torch.bool)[:, 1:]
-        return gathered, mask
-
     def _policy_loss(self, sample: dict[str, Any], advantage: float):
         torch = self.torch
-        current, mask = self._logprobs(sample["input_ids"], sample["loss_mask"])
+        input_ids = torch.tensor([sample["input_ids"]], device=self.model.device)
+        current = gather_token_logprobs(self.model(input_ids).logits, input_ids)[0]
+        mask = torch.tensor(
+            [sample["loss_mask"]], device=self.model.device, dtype=torch.bool
+        )[:, 1:][0]
         old = torch.tensor(
             [sample["old_logprobs"]], device=self.model.device, dtype=current.dtype
-        )[:, 1:]
-        advantage_tensor = torch.full_like(current, advantage)
+        )[:, 1:][0]
 
-        ratio = (current - old).exp()
-        unclipped = ratio * advantage_tensor
-        clipped = ratio.clamp(1 - self.config.clip_eps, 1 + self.config.clip_eps_high) * advantage_tensor
-        per_token = -torch.min(unclipped, clipped)
-
+        total = clipped_policy_loss(
+            current,
+            old,
+            advantage,
+            mask,
+            clip_low=self.config.clip_eps,
+            clip_high=self.config.clip_eps_high,
+        )
         if self.config.kl_coef > 0:
             with self._reference_weights():
-                reference, _ = self._logprobs(sample["input_ids"], sample["loss_mask"])
-            per_token = per_token + self.config.kl_coef * (current - reference)
+                reference = gather_token_logprobs(self.model(input_ids).logits, input_ids)[0]
+            total = total + self.config.kl_coef * k3_kl(current, reference, mask)
         if self.config.entropy_coef > 0:
-            per_token = per_token - self.config.entropy_coef * current
-
-        total = (per_token * mask).sum() / mask.sum().clamp_min(1)
+            weights = mask.to(current.dtype)
+            total = total - self.config.entropy_coef * (current * weights).sum() / weights.sum().clamp_min(1)
         if self.teacher is not None and self.config.distill is not None:
             teacher_logprobs = self.teacher.score(sample["input_ids"])
             teacher_tensor = torch.tensor(
                 [teacher_logprobs], device=self.model.device, dtype=current.dtype
-            )[:, 1:]
-            total = total + distillation_loss(
-                current, teacher_tensor, mask, self.config.distill
-            )
+            )[:, 1:][0]
+            total = total + distillation_loss(current, teacher_tensor, mask, self.config.distill)
         return total
 
     def _reference_weights(self):
