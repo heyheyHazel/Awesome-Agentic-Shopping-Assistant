@@ -6,12 +6,12 @@ from shoprl.env.reward import SUB_SCORES, score_purchase
 from shoprl.env.tasks import Task, build_task_pools, load_task_pool
 
 __all__ = [
+    "SUB_SCORES",
     "Catalog",
     "EnvPool",
     "LocalShopEnv",
     "Product",
     "ProductOption",
-    "SUB_SCORES",
     "Task",
     "build_catalog",
     "build_task_pools",

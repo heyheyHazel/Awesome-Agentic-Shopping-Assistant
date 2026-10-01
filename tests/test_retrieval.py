@@ -5,9 +5,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from shopping_assistant.retrieval.recall import reciprocal_rank_fusion, recall_products
 from shopping_assistant.domain.models import Product, SearchParams
 from shopping_assistant.retrieval import index as vector_index
+from shopping_assistant.retrieval.recall import recall_products, reciprocal_rank_fusion
 
 
 def make(product_id: str, name: str = "", price: float = 10.0, **kwargs) -> Product:

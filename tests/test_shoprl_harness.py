@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+from shoprl.harness.backends import ScriptedBackend
 from shoprl.harness.context import PRUNED_TOOL_RESULT, ContextPolicy
 from shoprl.harness.loop import TERMINAL_MARKER, AgentLoop
 from shoprl.harness.memory import Memory
 from shoprl.harness.tools import ToolRegistry
 from shoprl.harness.types import Message, ModelResponse, ToolCall
-from shoprl.harness.backends import ScriptedBackend
 
 ECHO_SCHEMA = {"type": "object", "properties": {"value": {"type": "string"}}}
 
@@ -79,7 +79,7 @@ def test_context_policy_prunes_old_tool_results_but_keeps_the_pairing():
     messages = [Message(role="system", content="s"), Message(role="user", content="u")]
     for index in range(4):
         messages.append(Message(role="assistant", content="", tool_calls=[call("shop_act", value=str(index))]))
-        messages.append(Message(role="tool", content=f"page {index}", tool_call_id=f"shop_act-1"))
+        messages.append(Message(role="tool", content=f"page {index}", tool_call_id="shop_act-1"))
 
     view = ContextPolicy(keep_recent_tool_results=2).apply(messages)
 
@@ -89,7 +89,7 @@ def test_context_policy_prunes_old_tool_results_but_keeps_the_pairing():
     assert results == [PRUNED_TOOL_RESULT, PRUNED_TOOL_RESULT, "page 2", "page 3"]
     # Every tool result still points at the call that produced it.
     assert all(
-        view[index].tool_call_id
+        message.tool_call_id
         for index, message in enumerate(view)
         if message.role == "tool"
     )

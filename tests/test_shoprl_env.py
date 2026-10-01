@@ -181,7 +181,7 @@ def test_buying_the_wrong_option_loses_the_option_score(catalog: Catalog, index:
 def test_a_finished_episode_returns_its_environment_to_the_pool(catalog: Catalog, index: Bm25Index):
     """A leaked slot is invisible until the pool silently runs out."""
     pool = EnvPool(catalog, index, capacity=1)
-    step = lambda value: ModelResponse(  # noqa: E731 - one-line scripted turn
+    step = lambda value: ModelResponse(
         tool_calls=[ToolCall(id=value, name="shop_act", arguments={"action": value})]
     )
     backend = ScriptedBackend(

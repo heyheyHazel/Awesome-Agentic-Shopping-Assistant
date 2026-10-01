@@ -95,8 +95,8 @@ class VLLMRolloutEngine:
         max_model_len: int = 18432,
         **engine_kwargs: Any,
     ):
-        from vllm import LLM
         from transformers import AutoTokenizer
+        from vllm import LLM
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         self.llm = LLM(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from bisect import bisect_right
 from collections.abc import Iterable
+
 from shopping_assistant.catalog import USERS, DemoUser, get_user
 from shopping_assistant.domain.models import RFM, UserProfile
 

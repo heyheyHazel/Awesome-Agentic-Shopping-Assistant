@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Fetch the base checkpoints the training configs point at.
 
 ModelScope is tried first because this box reaches it at ~5 MB/s against
@@ -59,7 +60,8 @@ def fetch(url: str, destination: Path) -> None:
             "curl", "-sSL", "--fail", "-C", "-",
             "--retry", "5", "--retry-delay", "3", "--connect-timeout", "30",
             "-o", str(destination), url,
-        ]
+        ],
+        check=False,
     )
     if result.returncode != 0:
         raise RuntimeError(f"curl exited {result.returncode} for {destination.name}")

@@ -12,9 +12,10 @@ example is dropped rather than trained on a guess.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol, Sequence
+from typing import Any, Protocol
 
 from shoprl.harness.types import Message
 

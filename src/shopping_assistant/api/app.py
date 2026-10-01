@@ -20,18 +20,18 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from shopping_assistant.agent.shopping_agent import ShoppingAgent
-from shopping_assistant.domain.rfm import SEGMENTS, build_profile
-from shopping_assistant.settings import get_settings
 from shopping_assistant.catalog import SOURCE, USERS
 from shopping_assistant.domain.models import (
     ChatRequest,
     ExperimentInfo,
     ProfileResponse,
-    RecommendRequest,
     RecommendationResponse,
+    RecommendRequest,
     UserSummary,
 )
+from shopping_assistant.domain.rfm import SEGMENTS, build_profile
 from shopping_assistant.services.ab_test import ABTestEngine
+from shopping_assistant.settings import get_settings
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -164,7 +164,7 @@ async def chat(request: ChatRequest) -> StreamingResponse:
                 "done",
                 {"latency_ms": round((time.perf_counter() - start) * 1000, 1), "timings": timings},
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.error("chat.failed", error=str(exc))
             yield _sse("error", {"message": "Something went wrong. Please try again."})
 

@@ -19,17 +19,16 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
-from shoprl.harness.context import ContextPolicy
-from shoprl.harness.loop import AgentLoop
-from shoprl.harness.memory import Memory
-from shoprl.harness.types import Message, Trajectory
-
 from shopping_assistant.agent.prompts import catalog_language_rule, language_directive
 from shopping_assistant.agent.tools import build_tool_registry
 from shopping_assistant.catalog import PRODUCTS
 from shopping_assistant.services.events import bind
 from shopping_assistant.services.llm import build_backend
 from shopping_assistant.settings import get_settings
+from shoprl.harness.context import ContextPolicy
+from shoprl.harness.loop import AgentLoop
+from shoprl.harness.memory import Memory
+from shoprl.harness.types import Message, Trajectory
 
 CATEGORIES = sorted({product.category for product in PRODUCTS})
 

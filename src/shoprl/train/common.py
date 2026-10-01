@@ -75,7 +75,6 @@ def load_tokenizer(config: ModelConfig):
 
 def load_model(config: ModelConfig, *, trainable: bool = True, adapter: str | None = None):
     """Load the policy, optionally wrapping it in a fresh or existing LoRA adapter."""
-    import torch
     from transformers import AutoModelForCausalLM
 
     model = AutoModelForCausalLM.from_pretrained(

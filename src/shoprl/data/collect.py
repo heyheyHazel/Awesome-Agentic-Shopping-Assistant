@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from shoprl.env.tasks import Task
 from shoprl.harness.rollout import EpisodeRunner

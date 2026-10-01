@@ -11,11 +11,11 @@ against a cosine similarity.
 
 from __future__ import annotations
 
-from shopping_assistant.settings import get_settings
 from shopping_assistant.catalog import PRODUCTS
 from shopping_assistant.domain.models import Product, SearchParams
 from shopping_assistant.retrieval.embeddings import get_encoder, model_is_present
 from shopping_assistant.retrieval.index import get_index, product_text
+from shopping_assistant.settings import get_settings
 
 RRF_K = 60  # standard Reciprocal Rank Fusion damping constant
 
@@ -42,9 +42,7 @@ def matches_filters(product: Product, search: SearchParams) -> bool:
         return False
     if search.min_price is not None and product.price < search.min_price:
         return False
-    if search.max_price is not None and product.price > search.max_price:
-        return False
-    return True
+    return search.max_price is None or product.price <= search.max_price
 
 
 def keyword_ranking(products: list[Product], terms: list[str]) -> list[Product]:

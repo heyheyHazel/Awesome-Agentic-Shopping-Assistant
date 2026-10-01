@@ -15,7 +15,7 @@ from typing import Any
 from shoprl.harness.context import ContextPolicy, estimate_tokens
 from shoprl.harness.memory import Memory
 from shoprl.harness.tools import ToolRegistry
-from shoprl.harness.types import Message, Step, ToolCall, Trajectory
+from shoprl.harness.types import Message, Step, Trajectory
 
 Emitter = Callable[[dict[str, Any]], None]
 OutcomeReader = Callable[[], dict[str, Any]]

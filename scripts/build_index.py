@@ -22,9 +22,14 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from shopping_assistant.catalog import PRODUCTS  # noqa: E402
-from shopping_assistant.retrieval.embeddings import ensure_model, get_encoder  # noqa: E402
-from shopping_assistant.retrieval.index import IDS_FILE, VECTORS_FILE, VectorIndex, product_text  # noqa: E402
+from shopping_assistant.catalog import PRODUCTS
+from shopping_assistant.retrieval.embeddings import ensure_model, get_encoder
+from shopping_assistant.retrieval.index import (
+    IDS_FILE,
+    VECTORS_FILE,
+    VectorIndex,
+    product_text,
+)
 
 
 def main() -> int:

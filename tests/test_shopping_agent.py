@@ -6,9 +6,9 @@ import asyncio
 
 import pytest
 
+from shopping_assistant.agent.shopping_agent import ShoppingAgent
 from shoprl.harness.backends import ScriptedBackend
 from shoprl.harness.types import ModelResponse, ToolCall
-from shopping_assistant.agent.shopping_agent import ShoppingAgent
 
 
 def call(name: str, **arguments) -> ToolCall:

@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import json
 import random
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from shoprl.env.catalog import Catalog, load_catalog
 from shoprl.settings import get_settings

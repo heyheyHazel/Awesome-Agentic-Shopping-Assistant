@@ -17,8 +17,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from shoprl.harness.tools import ToolRegistry
-
 from shopping_assistant.catalog import PRODUCTS
 from shopping_assistant.domain.currency import currency_symbol
 from shopping_assistant.domain.inventory import check_stock
@@ -27,6 +25,7 @@ from shopping_assistant.domain.rfm import build_profile
 from shopping_assistant.retrieval.recall import recall_products
 from shopping_assistant.services.events import emit
 from shopping_assistant.settings import get_settings
+from shoprl.harness.tools import ToolRegistry
 
 PRODUCTS_BY_ID = {product.product_id: product for product in PRODUCTS}
 

@@ -16,8 +16,9 @@ use this module; only the scorer differs.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol, Sequence
+from typing import Any, Protocol
 
 Mode = str
 
@@ -50,7 +51,6 @@ def reverse_kl(student: Any, teacher: Any) -> Any:
 
 def jsd(student: Any, teacher: Any, beta: float = 0.5) -> Any:
     """Jensen-Shannon divergence, a bounded compromise between the two KLs."""
-    import torch
 
     mix = (student.exp() * (1 - beta) + teacher.exp() * beta).clamp_min(1e-12).log()
     return (1 - beta) * forward_kl(student, mix) + beta * forward_kl(teacher, mix)
@@ -66,7 +66,6 @@ def distillation_loss(
     config: DistillConfig,
 ) -> Any:
     """Masked distillation term; ``loss_mask`` marks the positions that count."""
-    import torch
 
     per_position = LOSSES[config.mode](student_logprobs, teacher_logprobs)
     weights = loss_mask.to(per_position.dtype)

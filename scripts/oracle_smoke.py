@@ -21,13 +21,13 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from shoprl.env.catalog import load_catalog  # noqa: E402
-from shoprl.env.local import EnvPool  # noqa: E402
-from shoprl.env.reward import _ratio  # noqa: E402
-from shoprl.env.search import Bm25Index  # noqa: E402
-from shoprl.eval.metrics import summarise  # noqa: E402
-from shoprl.harness.rollout import EpisodeRunner  # noqa: E402
-from shoprl.harness.types import ModelResponse, ToolCall  # noqa: E402
+from shoprl.env.catalog import load_catalog
+from shoprl.env.local import EnvPool
+from shoprl.env.reward import _ratio
+from shoprl.env.search import Bm25Index
+from shoprl.eval.metrics import summarise
+from shoprl.harness.rollout import EpisodeRunner
+from shoprl.harness.types import ModelResponse, ToolCall
 
 NAVIGATION = {
     "buy now",

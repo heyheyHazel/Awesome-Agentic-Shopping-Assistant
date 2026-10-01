@@ -131,7 +131,7 @@ def test_a_dict_shaped_template_result_still_yields_target_tokens():
 
 
 def test_the_collator_pads_ids_labels_and_mask_independently():
-    torch = pytest.importorskip("torch")
+    pytest.importorskip("torch")
     from shoprl.train.sft import build_collator
 
     collate = build_collator(pad_token_id=0)

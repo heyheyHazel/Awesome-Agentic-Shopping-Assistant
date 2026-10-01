@@ -113,7 +113,7 @@ def deterministic_price_upper(asin: str, instruction: str, price: float) -> floa
     ladder = price_ceiling(price)
     if len(ladder) < 2:
         return NO_PRICE_CEILING
-    low, high = sorted(random.Random(_seed("ceiling", asin, instruction)).sample(ladder, 2))
+    _, high = sorted(random.Random(_seed("ceiling", asin, instruction)).sample(ladder, 2))
     return high
 
 

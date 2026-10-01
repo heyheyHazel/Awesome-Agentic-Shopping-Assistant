@@ -7,8 +7,8 @@ training engines ignore it.
 
 from __future__ import annotations
 
-from shoprl.harness.backends import OpenAIBackend
 from shopping_assistant.settings import get_settings
+from shoprl.harness.backends import OpenAIBackend
 
 
 def build_backend() -> OpenAIBackend:

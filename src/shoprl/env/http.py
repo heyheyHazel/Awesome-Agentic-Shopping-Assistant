@@ -25,7 +25,7 @@ class RemoteShopEnv:
         body = response.json()
         result = body.get("result")
         if not isinstance(result, dict):
-            raise RuntimeError(f"malformed environment response: {body}")
+            raise RuntimeError(f"malformed environment response: {body}")  # noqa: TRY004
         if result.get("error"):
             raise RuntimeError(str(result["error"]))
         return result

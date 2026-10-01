@@ -33,10 +33,10 @@ def test_chat_streams_the_whole_protocol_without_an_llm(monkeypatch):
     """
     from fastapi.testclient import TestClient
 
-    from shoprl.harness.backends import ScriptedBackend
-    from shoprl.harness.types import ModelResponse, ToolCall
     from shopping_assistant.agent.shopping_agent import ShoppingAgent
     from shopping_assistant.api import app as app_module
+    from shoprl.harness.backends import ScriptedBackend
+    from shoprl.harness.types import ModelResponse, ToolCall
 
     def call(name, **arguments):
         return ToolCall(id=name, name=name, arguments=arguments)
@@ -51,14 +51,13 @@ def test_chat_streams_the_whole_protocol_without_an_llm(monkeypatch):
     )
     monkeypatch.setattr(app_module, "_agent", ShoppingAgent(backend))
 
-    with TestClient(app_module.app) as client:
-        with client.stream(
-            "POST",
-            "/api/v1/chat",
-            json={"user_id": "U001", "message": "推荐一个香薰", "language": "zh", "thread_id": "t-1"},
-        ) as response:
-            assert response.status_code == 200
-            events = parse_sse("".join(response.iter_text()))
+    with TestClient(app_module.app) as client, client.stream(
+        "POST",
+        "/api/v1/chat",
+        json={"user_id": "U001", "message": "推荐一个香薰", "language": "zh", "thread_id": "t-1"},
+    ) as response:
+        assert response.status_code == 200
+        events = parse_sse("".join(response.iter_text()))
 
     names = [name for name, _ in events]
     assert names[0] == "session"
@@ -148,7 +147,7 @@ def test_the_serving_path_imports_without_an_agent_framework():
         print("clean")
         """
     )
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: PLW1510
         [sys.executable, "-c", script], capture_output=True, text=True, cwd="."
     )
 

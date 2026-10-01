@@ -15,14 +15,13 @@ built-in demo catalog and the app still runs end to end.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import structlog
 
-from shopping_assistant.settings import get_settings
 from shopping_assistant.catalog.demo_products import MOCK_PRODUCTS
 from shopping_assistant.catalog.demo_users import MOCK_USERS, DemoUser
 from shopping_assistant.domain.models import Product
+from shopping_assistant.settings import get_settings
 
 logger = structlog.get_logger()
 
@@ -104,7 +103,7 @@ PRODUCTS, USERS, SOURCE = _resolve()
 
 # Mock IDs are U001.. ; ShopSimulator personas are U08…, so prefer the mock
 # default when it exists and otherwise take the first real shopper.
-DEFAULT_USER_ID = MOCK_DEFAULT_USER_ID if MOCK_DEFAULT_USER_ID in USERS else sorted(USERS)[0]
+DEFAULT_USER_ID = MOCK_DEFAULT_USER_ID if MOCK_DEFAULT_USER_ID in USERS else min(USERS)
 
 
 def get_user(user_id: str) -> DemoUser:

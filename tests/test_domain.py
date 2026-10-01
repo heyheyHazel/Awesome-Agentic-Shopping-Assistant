@@ -1,10 +1,10 @@
 """RFM segmentation, currency and stock rules."""
 
+from shopping_assistant.catalog import USERS, DemoUser
 from shopping_assistant.domain.currency import currency_code, currency_symbol
 from shopping_assistant.domain.inventory import check_stock
 from shopping_assistant.domain.models import Product
 from shopping_assistant.domain.rfm import SEGMENTS, RFMScale, classify, compute_rfm
-from shopping_assistant.catalog import USERS, DemoUser
 
 
 def test_each_demo_user_gets_a_distinct_segment():

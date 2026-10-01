@@ -10,7 +10,8 @@ constraint, and averaging them together hides that.
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from shoprl.env.reward import SUB_SCORES
 

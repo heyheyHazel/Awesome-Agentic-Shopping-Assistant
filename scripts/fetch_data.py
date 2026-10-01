@@ -26,13 +26,14 @@ import http.client
 import json
 import sys
 import urllib.request
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from shopping_assistant.settings import get_settings  # noqa: E402
+from shopping_assistant.settings import get_settings
 
 HF_ENDPOINT = "https://hf-mirror.com"  # huggingface.co is unreachable from some networks
 AIFASTHUB = "https://aifasthub.com"    # a second HF mirror; the two fail independently
@@ -118,7 +119,7 @@ def _is_complete(path: Path) -> bool:
         if tail.startswith("["):  # a single pretty-printed JSON array
             return tail.endswith("]")
         return _parses(tail.splitlines()[-1])
-    except Exception:
+    except Exception:  # noqa: BLE001
         return False
 
 

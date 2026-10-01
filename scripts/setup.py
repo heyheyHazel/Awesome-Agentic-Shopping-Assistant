@@ -21,10 +21,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from shopping_assistant.catalog import PRODUCTS  # noqa: E402
-from shopping_assistant.settings import get_settings  # noqa: E402
-from shopping_assistant.retrieval.embeddings import MODEL_DIR, model_is_present  # noqa: E402
-from shopping_assistant.retrieval.index import load as load_index  # noqa: E402
+from shopping_assistant.catalog import PRODUCTS
+from shopping_assistant.retrieval.embeddings import MODEL_DIR, model_is_present
+from shopping_assistant.retrieval.index import load as load_index
+from shopping_assistant.settings import get_settings
 
 SCRIPTS = REPO_ROOT / "scripts"
 
@@ -62,7 +62,7 @@ def run(script: str, label: str, *flags: str) -> bool:
     """Run one step with its output streaming through, so it never looks hung."""
     print(f"\n=== {label} ===\n")
     command = [sys.executable, str(SCRIPTS / script), *flags]
-    return subprocess.run(command).returncode == 0
+    return subprocess.run(command).returncode == 0  # noqa: PLW1510
 
 
 def main() -> int:

@@ -116,7 +116,7 @@ def _fetch_size(url: str) -> int | None:
         ) as response:
             length = response.headers.get("Content-Length")
             return int(length) if length else None
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
 
 
@@ -124,7 +124,7 @@ def _fetch_curl(url: str, target: Path) -> bool:
     """One curl attempt; `-C -` resumes an interrupted file instead of restarting it."""
     if shutil.which("curl") is None:
         return False
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: PLW1510
         ["curl", "-sSL", "-C", "-", "--max-time", "180", "-o", str(target), url],
         capture_output=True,
     )
@@ -148,7 +148,7 @@ def _fetch_urllib(url: str, target: Path) -> bool:
                 while chunk := response.read(1 << 16):
                     sink.write(chunk)
         return True
-    except Exception:
+    except Exception:  # noqa: BLE001
         return False
 
 

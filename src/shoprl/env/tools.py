@@ -8,13 +8,14 @@ trained model able to run against the real environment unchanged.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from shoprl.env.actions import END_BUTTON
 from shoprl.env.persona import summarise as summarise_persona
+from shoprl.harness.loop import TERMINAL_MARKER
 from shoprl.harness.memory import Memory
 from shoprl.harness.tools import ToolRegistry
-from shoprl.harness.loop import TERMINAL_MARKER
 
 ACT_SCHEMA = {
     "type": "object",
