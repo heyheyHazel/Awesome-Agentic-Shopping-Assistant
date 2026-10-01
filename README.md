@@ -1,15 +1,17 @@
-# Multi-Agent Shopping Assistant
+# Agentic Shopping Assistant
 
-基于 **LangGraph** 的多 Agent 电商导购系统：Supervisor 用 LLM 解析每个请求的意图与检索参数，画像、召回、库存、精排+文案各司其职，全部过程通过 SSE 实时推送到前端仪表盘。后端 FastAPI，前端 React 19 + TypeScript。
+单 Agent + 多工具的电商导购系统：**一个 tool-calling agent** 负责理解需求、改写查询、挑选商品与撰写回复；画像、召回、库存这些它没法凭空知道的东西做成确定性工具。全过程通过 SSE 实时推送，左栏如实展示哪些工具被调用了。后端 FastAPI，前端 React 19 + TypeScript。
 
 ## 亮点
 
-- **每轮只花 2 次 LLM 调用**：查询理解 1 次，排序 + 文案合并 1 次；召回、库存、过滤、回复组装全是确定性代码，实测 0 ms
+- **只有一次 LLM 循环**：意图判断、query 改写、选品、写文案全部在同一个 tool-calling agent 里完成，不再有 supervisor → 子 Agent 的固定流水线
+- **通用问答只花 1 次 LLM 调用**（不调工具直接答）；购物咨询 2–4 次（工具轮 + 写答案），取决于模型自己决定查多少
+- **工具是确定性的**：模型决定查什么、推什么，但召回、库存校验、预算硬过滤都是代码；**UI 上的商品卡片只来自工具的真实返回**，不会随模型的措辞漂移
 - **混合召回**：关键词召回 + **本地 ONNX 语义向量召回**（`bge-small-zh-v1.5`，用 RRF 融合）。无需 torch（约 2 GB）、无需 embedding API，完全离线；实测「夏天穿的连衣裙」「卧室香薰」这类自然语言都能命中
 - **硬约束不妥协**：预算 / 类目 / 品牌是过滤器，**永不为了让列表非空而放宽**；确实无合适商品时由排序模型返回空列表，前端提示「没有符合条件的商品」
-- **意图路由**：Supervisor 判断是购物咨询还是通用问答，后者走独立的 tool-calling Agent（`search_catalog` / `get_shopper_profile`）
+- **意图由模型自己判断**：购物咨询就去调工具，闲聊就直接答——没有单独的意图分类调用，所以通用问答只花 1 次 LLM 调用
 - **全程实时流**：Agent 状态、商品卡片、库存、逐字回复都以事件流推送，前端三栏同步刷新
-- **对话记忆**：LangGraph Checkpointer 按 `thread_id` 保存上下文，支持「便宜点的」「那白色的呢」这类追问
+- **对话记忆**：按 `thread_id` 保存对话记录 + 记忆笔记（模型可用 `save_note` 记下预算、颜色这类硬约束，且不会被上下文裁剪剪掉），支持「便宜点的」「那白色的呢」这类追问
 - **跨服务商的结构化输出**：`JsonStructured`（JSON 模式 + schema 注入），同时兼容 OpenAI 与 DeepSeek thinking 模型
 - **稳健性**：每个 Agent 独立超时熔断、指数退避重试、失败降级（排序挂了就按召回顺序继续）；硬约束（预算/类目）永不为了让列表非空而放宽
 - **A/B 测试**：一致性哈希分桶 + Thompson Sampling 动态调权
@@ -21,101 +23,121 @@
 
 | 区域 | 内容 |
 |------|------|
-| 左栏 | 4 个 Agent 状态卡片（空闲 / 运行中 / 完成）+ 技术栈 |
-| 中栏 | 对话流：Supervisor 回复、商品卡片（Best Match / High Rated / Great Value）、库存徽章、逐字流式推荐语；底部输入框 + SSE 连接状态 |
+| 左栏 | 5 张工具卡片（购物 Agent + 4 个工具，空闲 / 运行中 / 完成） |
+| 中栏 | 对话流：商品卡片（Best Match / High Rated / Great Value）、库存徽章、逐字流式推荐语；底部输入框 + SSE 连接状态 |
 | 右栏 | 用户画像（VIP、RFM Segment、R/F/M 数值）、RFM 客群聚类、A/B 实验面板（转化率 + Winner）、响应耗时（含各 Agent 分解） |
 
 ## 系统架构
 
 ```mermaid
 graph TD
-    START([用户消息]) --> SUP["Supervisor Agent<br/>LLM ①：意图 + 检索参数"]
-    SUP -->|"general"| CHAT["Chat Agent<br/>工具调用：search_catalog / get_shopper_profile"]
-    SUP -->|"product_search"| PROFILE["Profile Agent<br/>分位 RFM 画像"]
-    PROFILE --> RECALL["Recall<br/>关键词/预算/类目过滤"]
-    RECALL --> INV["Inventory Agent<br/>库存 + 限购"]
-    INV --> FILTER["Filter<br/>缺货剔除 → 候选清单"]
-    FILTER -->|"候选非空"| REC["Recommend Agent<br/>LLM ②：排序 + 文案一次产出"]
-    FILTER -->|"无匹配"| RESP
-    REC --> RESP["Respond<br/>商品卡片 / 库存 / 逐字推荐语（无 LLM）"]
-    CHAT --> DONE([SSE 事件流])
-    RESP --> DONE
+    USER([用户消息]) --> AGENT["Shopping Agent<br/>唯一的 tool-calling 循环"]
+    AGENT -->|"需要商品"| SEARCH["search_catalog<br/>混合召回 + 预算/类目硬过滤"]
+    AGENT -->|"需要偏好"| PROFILE["get_shopper_profile<br/>分位 RFM 画像"]
+    AGENT -->|"即将推荐"| INV["check_inventory<br/>库存 + 限购"]
+    AGENT -->|"决定推什么"| PRESENT["present_recommendation<br/>发出商品卡片"]
+    AGENT -->|"直接回答"| DONE([SSE 事件流])
+    SEARCH --> DONE
+    PROFILE --> DONE
+    INV --> DONE
+    PRESENT --> DONE
 
-    style SUP fill:#e3f2fd
-    style REC fill:#e8f5e9
-    style RESP fill:#fff3e0
+    style AGENT fill:#e3f2fd
+    style PRESENT fill:#e8f5e9
 ```
 
-### 为什么只有两次 LLM 调用
+### 为什么不拆成多 Agent
 
-画像、召回、库存、过滤、组装回复都不需要模型，实测每项 0.0–1.4 ms，而一次 LLM 调用是 1–2 s，所以把它们拆成独立节点不会更快。排序和写推荐语输入相同、只差产出内容，因此合并进同一次结构化调用。
+实测这份目录上，确定性阶段（画像 0.2ms、召回 10ms、库存 0.9ms）比一次 LLM 调用快 3~4 个数量级，而且它们之间**没有真正的并行度**（旧版把 `rerank ∥ inventory` 并起来，但 inventory 只耗时 0.9ms，等于没并）。所以拆成多个 Agent 只增加往返次数与状态维护，不换任何东西。
 
-> 注意：LangGraph 里一个有多条不同层级入边的节点会**每个 superstep 执行一次**。把 `profile → filter` 与 `inventory → filter` 分开连（`inventory` 比 `profile` 晚一个 superstep 完成）会让下游 LLM 调用静默翻倍；现为单链，`tests/test_graph.py::test_a_shopping_turn_costs_exactly_two_llm_calls` 守住这一点。
+**一个反面教训**：旧版把「写推荐语」单独做成一个 Agent，结果它和最终总结在写同一段话，用户看到两个气泡说同一件事。现在文案就是最终回答本身。
 
-## Agent 一览
+> 工具返回的结果同时是「给模型看的文本」与「给 UI 用的数据」。如果让 UI 渲染模型措辞里的商品，用户说「200 元以内」就可能在卡片上看到超预算的东西——所以卡片只从 `search_catalog` / `present_recommendation` 的真实返回里取。
 
-| Agent | 类型 | 职责 | 实现 |
-|-------|------|------|------|
-| `SupervisorAgent` | LLM 结构化输出 | 意图路由 + 检索参数抽取 | `agents/supervisor_agent.py` |
-| `UserProfileAgent` | 确定性计算 | 分位 RFM 打分 + 客群分类 | `agents/user_profile_agent.py` |
-| `ProductRecAgent` | 规则召回 + LLM | 目录召回，以及排序 + 文案（一次调用） | `agents/product_rec_agent.py` |
-| `InventoryAgent` | 确定性计算 | 缺货过滤、低库存预警、限购 | `agents/inventory_agent.py` |
-| `ChatAgent` | LLM 工具调用 | 通用问答（目录/画像工具） | `agents/chat_agent.py` |
+## 工具一览
+
+| 工具 | 类型 | 职责 | 实现 |
+|------|------|------|------|
+| `search_catalog` | 确定性 | 混合召回（关键词 + 向量 RRF），预算/类目硬过滤，永不返回售罄商品 | `retrieval/recall.py` |
+| `get_shopper_profile` | 确定性 | 分位 RFM 客群、类目偏好、常购价位 | `domain/rfm.py` |
+| `check_inventory` | 确定性 | 实时库存、低库存预警、限购策略 | `domain/inventory.py` |
+| `present_recommendation` | 确定性 | 把 Agent 选定的商品作为卡片发出（上限 3 张） | `agent/tools.py` |
+
+意图判断与 query 改写不占独立工具——模型在填工具参数时自然完成；选品与文案在它写最终回答时完成。四个工具在 `agent/tools.py` 里声明成 `ToolSpec`（函数 + JSON Schema），循环在 `agent/shopping_agent.py`，循环本身来自 `shoprl/harness/`。
 
 ## 快速开始
 
 ### 环境要求
 
 - Python 3.12+
-- Node.js 20+
+- Node.js 20+（前端开发时需要；若只想跑构建好的页面则不需要）
 - 任意 OpenAI 兼容 LLM 接口的 API Key
 
-### 1. 后端
-
 ```bash
-cd python
-
-conda create -n agent python=3.12 -y
-conda activate agent
-pip install -r requirements-dev.txt   # 含 pytest
-
+pip install -e ".[dev]"      # 安装为可编辑包，含 pytest
 cp .env.example .env
 # 编辑 .env，填入 API Key / 服务地址 / 模型名
-
-# 拉取 ShopSimulator 真实商品与用户画像（约 27 MB，未执行则自动回落内置演示数据）
-python scripts/fetch_data.py
-python scripts/build_index.py         # 语义召回索引（首次会自动下载约 24 MB 模型）
-
-python main.py                        # http://localhost:8000
 ```
 
-> **DeepSeek 用户**：thinking 模型会拖慢结构化调用（实测 10s → 1.4s）且不支持强制 tool_choice，
-> 请在 `.env` 中设置 `ECOM_LLM_DISABLE_THINKING=true`，项目会自动关闭隐藏推理。
-
-### 2. 前端
+### 1. 准备数据（一条命令）
 
 ```bash
-cd frontend
-npm install
-npm run dev                           # http://localhost:5173
+python scripts/setup.py
 ```
 
-浏览器打开 http://localhost:5173 ，试试输入 `推荐一款 300 元以内的保湿护肤品`。
-
-### 3. 测试
-
-16 个单元测试与集成测试全部使用桩 LLM，不需要 API Key（固定跑内置演示数据）：
+这一步会下载 ShopSimulator 中文商品库并建立语义召回索引。**它会自动跳过已完成的部分**，
+随时可以重跑：
 
 ```bash
-cd python
-pytest tests/ -v
+python scripts/setup.py --check      # 只报告当前有什么，不联网
+python scripts/setup.py --catalog    # 只拉商品库
+python scripts/setup.py --index      # 只建索引
 ```
 
-### 4. Docker
+> **关于网络**：数据与模型都托管在境外（Hugging Face / jsDelivr），国内需要镜像。脚本已经处理了这件事：
+> 多个镜像轮询、断点续传、以及**校验文件大小后才发现截断则拒绝转换**。若确实全部镜像都不可用，
+> 它会明确告诉你哪一步失败、以及重跑哪条命令——**不会**悄悄给你一份残缺的数据。
+
+#### 两种数据模式（很重要）
+
+跳过上面这步也能跑，但那是**降级模式**，功能差别很大：
+
+| | 不跑 setup（默认回落） | 跑过 setup 之后 |
+|---|---|---|
+| 商品 | **32 件手写演示数据** | **23,315 件真实中文商品**，9 个类目 |
+| 用户 | 4 个 | **4,009 个**（含 RFM 画像） |
+| 召回方式 | **只有关键词匹配**，语义召回失效 | 关键词 + 语义向量混合召回 |
+| 适合 | 单纯看界面与流程 | 真实体验推荐质量 |
+
+`python scripts/setup.py --check` 会明确告诉你当前处在哪一种。
+
+### 2. 启动
+
+前端有**开发**和**单进程**两种跑法，按需要选一种。
+
+**开发模式**（改前端时用，有热更新，两个进程）：
 
 ```bash
-export ECOM_LLM_API_KEY=你的密钥
-docker compose up -d                  # API: http://localhost:8000
+cd frontend && npm install && npm run dev    # http://localhost:5173，/api 自动代理到 8000
+python -m shopping_assistant                 # 另一个终端
+```
+
+**单进程模式**（只有一个后端进程，把前端打进 `frontend/dist` 后由 FastAPI 同源托管）：
+
+```bash
+cd frontend && npm install && npm run build   # 产出 frontend/dist/
+python -m shopping_assistant                  # http://localhost:8000 就是完整页面
+```
+
+`frontend/dist/` **不进版本库**（构建产物不入库是通行做法），所以 clone 之后需要自己 build 一次。
+未 build 时后端会打日志提示并只提供 API：http://localhost:8000/docs 。
+
+### 4. 测试
+
+94 个测试，全部不需要 API Key、不需要 GPU（固定跑内置演示数据，与 `data/` 是否存在无关）：
+
+```bash
+pytest -q
 ```
 
 ## API
@@ -135,15 +157,13 @@ docker compose up -d                  # API: http://localhost:8000
 | 事件 | 载荷 | 前端表现 |
 |------|------|----------|
 | `session` | `thread_id` | 保存会话，后续追问复用 |
-| `agent` | `agent`, `status`, `message` | 左栏状态灯 / 聊天内的 Agent 状态 |
-| `plan` | `intent`, `reply`, `agents`, … | Supervisor 气泡 + 本轮调度计划 |
 | `experiment` | `variant`, `variants[]`, `winner` | 右栏 A/B 面板 |
+| `tool` | `tool`, `status`, `message` | 左栏工具卡片状态灯 |
 | `profile` | 用户画像对象 | 右栏画像 + RFM 面板 |
 | `products` | 商品列表 | 商品卡片（自动打徽章） |
-| `marketing` | 文案条目 + 客群 | Copywriting Agent 气泡 |
-| `inventory` | 库存条目 + 摘要 | Inventory Agent 气泡 + 库存徽章 |
+| `inventory` | 库存条目 + 摘要 | 库存气泡 + 库存徽章 |
 | `token` | `content` | 逐字流式回复 |
-| `done` | `latency_ms`, `timings` | 响应耗时卡片 |
+| `done` | `latency_ms`, `timings` | 响应耗时卡片（按工具分解） |
 | `error` | `message` | 错误气泡 |
 
 ## 配置
@@ -161,41 +181,67 @@ docker compose up -d                  # API: http://localhost:8000
 | `ECOM_DATA_SOURCE` | `auto` | `auto` / `real` / `mock`，见下方「数据来源」 |
 | `ECOM_CURRENCY` | `CNY` | 目录货币（ISO 代码），同时驱动界面价格符号与提示词 |
 
-可选接入 LangSmith 追踪：设置 `LANGSMITH_TRACING=true` 与 `LANGSMITH_API_KEY`。
+每一轮都会产出完整的 `Trajectory`（含每个 step 实际发给模型的 prompt、工具返回、耗时与终止原因），需要排查时直接看它即可。
 
 ## 项目结构
 
 ```text
 .
-├── python/
-│   ├── main.py                     # FastAPI 入口 + SSE 适配器
-│   ├── orchestrator/graph.py       # LangGraph 状态图（核心编排）
-│   ├── agents/
-│   │   ├── supervisor_agent.py     # LLM 计划与路由
-│   │   ├── user_profile_agent.py   # 分位 RFM 画像
-│   │   ├── product_rec_agent.py    # 召回 + 排序/文案（一次调用）
-│   │   ├── inventory_agent.py      # 库存决策
-│   │   ├── chat_agent.py           # 工具调用助手
-│   │   ├── structured.py           # 跨服务商结构化输出
-│   │   ├── models.py               # ChatOpenAI 工厂
-│   │   └── base_agent.py           # 超时 / 重试 / 降级基类
-│   ├── data/                       # 商品目录与用户（含生成的向量索引）
-│   ├── services/ab_test.py         # A/B + Thompson Sampling
-│   ├── services/embeddings.py      # 本地 ONNX 文本向量（无需 torch）
-│   ├── services/vector_index.py    # 目录向量索引 + 余弦检索
-│   ├── scripts/fetch_data.py       # 下载并转换 ShopSimulator 数据
-│   ├── scripts/build_index.py      # 构建语义召回索引
-│   ├── models/schemas.py           # Pydantic 模型
-│   ├── config/settings.py          # 环境配置
-│   └── tests/                      # 15 个测试（桩 LLM）
-├── frontend/
-│   └── src/
-│       ├── hooks/useAgentStream.ts # SSE 连接与全局状态
-│       ├── components/             # 三栏布局的所有组件
-│       ├── api.ts, types.ts
-│       └── index.css               # Tailwind 主题
-├── docs/architecture.md            # 架构与协议详解
-└── docker-compose.yml
+├── pyproject.toml                  # 依赖 / pytest / ruff 配置
+├── src/shopping_assistant/         # 后端源码（src 布局，可安装为包）
+│   ├── settings.py                 # 配置（含 data_dir）
+│   ├── api/app.py                  # FastAPI：路由 + SSE + 托管前端
+│   ├── agent/
+│   │   ├── shopping_agent.py       # 唯一的 tool-calling agent
+│   │   ├── tools.py                # 4 个确定性工具
+│   │   └── prompts.py              # system prompt 与语言规则
+│   ├── domain/                     # 纯业务规则，无 I/O
+│   │   ├── models.py               # Pydantic 模型
+│   │   ├── rfm.py                  # 分位 RFM 客群
+│   │   ├── inventory.py            # 库存与限购
+│   │   └── currency.py
+│   ├── retrieval/                  # 召回层
+│   │   ├── recall.py               # 硬过滤 + 关键词/向量 + RRF
+│   │   ├── embeddings.py           # 本地 ONNX 向量（多镜像下载）
+│   │   └── index.py                # 向量索引与检索
+│   ├── catalog/                    # 商品与用户读取（真实↔演示）
+│   └── services/                   # llm / structured / ab_test / events
+│
+├── src/shoprl/                     # 可训练 agent 内核（无 Web 依赖，可与服务端共用）
+│   ├── harness/                    # 循环 / 上下文策略 / 记忆 / 工具注册表 / 模型后端
+│   ├── env/                        # ShopSimulator：商品库 / BM25 检索 / 会话 / 奖励 / 任务池
+│   ├── data/                       # 教师轨迹采集 + turn 级 SFT 数据（含 loss mask）
+│   ├── train/                      # rollout 引擎 / SFT / GRPO(RLVR) / OPD 蒸馏
+│   ├── eval/                       # rollout 评测 + 官方指标
+│   └── cli.py                      # python -m shoprl.cli <stage>
+│
+├── tests/                          # 94 个测试，按包结构对齐
+│   ├── test_api.py                 # HTTP 层
+│   ├── test_agent_tools.py         # 4 个工具
+│   ├── test_domain.py              # RFM / 库存 / 货币
+│   ├── test_retrieval.py           # 召回与融合
+│   ├── test_ab_test.py
+│   └── test_shoprl_*.py            # 环境语义 / harness 不变量 / loss mask / 任务池
+│
+├── frontend/                       # React 19 + TS + Tailwind
+│   └── dist/                       # 构建产物，由后端托管
+│
+├── scripts/                        # 环境与数据脚本（不属于服务运行时）
+│   ├── setup.py                    # 一条命令：拉数据 + 建索引
+│   ├── fetch_data.py
+│   └── build_index.py
+│
+├── data/                           # 数据产物（gitignore）
+│   ├── raw/                        # 下载的原始文件
+│   └── generated/                  # catalog.json / shoppers.json / embeddings.npy
+│
+├── models/                         # 模型权重（gitignore）
+│   └── bge-small-zh-v1.5/          # 本地 ONNX 向量模型，约 24 MB
+│
+├── configs/                        # 训练配置（JSON）+ CLI 逐字段覆盖
+├── training/                       # 训练入口脚本（每阶段一个，带硬件预设）
+├── plan/                           # 计划与决策文档
+└── docs/                           # architecture / data-audit / harness / training
 ```
 
 ## 数据来源
@@ -203,7 +249,6 @@ docker compose up -d                  # API: http://localhost:8000
 ### 真实数据（推荐）
 
 ```bash
-cd python
 python scripts/fetch_data.py                 # 完整库 23,421 条，约 24 MB，镜像自动回退
 python scripts/fetch_data.py --source hf     # 强制走 HF（同一份数据，~104 MB jsonl）
 ```
@@ -215,19 +260,18 @@ python scripts/fetch_data.py --source hf     # 强制走 HF（同一份数据，
 
 > 只要 persona 分片（4,638 件商品）的话，用它当 `--files` 即可，但那些记录本来就是完整库的子集，没有理由这么取。
 
-上游数据集**没有 license**，因此数据不入库：`python/data/raw/` 与 `python/data/generated/` 已在 `.gitignore` 中，clone 后需自行执行脚本。
+上游数据集**没有 license**，因此数据不入库：`data/` 与 `models/` 已在 `.gitignore` 中，clone 后执行 `python scripts/setup.py`。
 
 商品缺少评分、评价数与库存，这三项由 asin 的确定性哈希**合成**（保证同商品永远同值），代码中标注为 SYNTHETIC；`recency_days` 同样由复购率推导，因数据集不含「距上次购买天数」。
 
 ## 语义召回
 
 ```bash
-cd python
-python scripts/build_index.py            # 23315 件约 67s；首次会下载约 24 MB 模型
+python scripts/setup.py                   # 一条命令完成下载 + 建索引（23315 件编码约 67s）
 ```
 
 - 模型：`BAAI/bge-small-zh-v1.5` 的 int8 ONNX 版本，跑在 `onnxruntime` 上——**不需要 torch**，也不需要 embedding API
-- 索引：`data/generated/embeddings.npy`（512 维，L2 归一化，点积即余弦）；文件被 gitignore，模型在 `data/models/`
+- 索引：`data/generated/embeddings.npy`（512 维，L2 归一化，点积即余弦）；文件被 gitignore，模型权重在 `models/`
 - 检索：关键词与向量两路各自排序，用 **RRF** 融合（比标定「关键词分」与「余弦相似度」的权重稳得多）
 - 约束：硬过滤先算好合规商品集合，**向量检索与排序都只在该集合内进行**（子集矩阵乘，所以预算/类目越窄越快），最后在 `recall_products` 出口再校验一次
 - 降级：索引缺失、商品目录变化（id 对不上）或模型未下载时，自动回落纯关键词召回，不会报错
@@ -246,9 +290,48 @@ python scripts/build_index.py            # 23315 件约 67s；首次会下载约
 
 `ECOM_DATA_SOURCE` 控制选择：`auto`（默认，有真实数据则用真实数据）／`real`（缺失时启动即报错）／`mock`（强制内置，测试使用）。
 
-调库与选数逻辑集中在 `data/store.py`，其余代码只依赖 `from data import PRODUCTS, USERS, get_user`。
+调库与选数逻辑集中在 `catalog/store.py`，其余代码只依赖 `from shopping_assistant.catalog import PRODUCTS, USERS`。
 
 A/B 面板预置 499 / 498 次实验样本（A 62.7% vs B 74.3%），可直接观察 Thompson Sampling 的获胜方。
+
+## 训练子系统（shoprl）
+
+上面这套界面是**产品**；`src/shoprl/` 是**可训练的内核**：同一个 agent 循环既服务于前端，
+也用来产出训练数据，所以「演示里的 agent」和「训练出来的 agent」不会走偏。
+
+```text
+ShopSimulator 原始数据 ──► 商品库 + 任务池 ──► 教师轨迹采集 ──► SFT ──► 在线 GRPO(RLVR)
+                                              （可叠加 OPD / OPSD / RLSD 蒸馏项）
+                                                                          └──► official_test 评测
+```
+
+一条命令一个阶段，全部在 `python -m shoprl.cli` 下：
+
+```bash
+python -m shoprl.cli catalogue      # 原始数据 → 商品库（含 SKU 选项与价格）
+python -m shoprl.cli tasks          # 任务池：official_test / dev / sft / rl
+bash training/scripts/01_collect_teacher.sh   # 教师轨迹（需一个 API）
+bash training/scripts/02_prepare_sft.sh       # turn 级 SFT 数据（带真实 loss mask）
+bash training/scripts/03_train_sft.sh         # SFT（PRESET=4090 / 4090-lora / rtx6000 / smoke）
+bash training/scripts/04_train_grpo.sh        # GRPO + RLVR（DISTILL=1 叠加蒸馏）
+bash training/scripts/05_eval.sh              # official_test 上的单次 rollout 评测
+```
+
+几个已经用实测数字确认的结论（详见 [docs/data-audit.md](docs/data-audit.md)）：
+
+- 原始发布里 **23,421 条任务**，行序就是 task id；旧的数据管线只保留了商品，**任务和 SKU 选项全部被丢掉**，
+  所以此前这个仓库无法训练；
+- `fine_items_train_persona.jsonl` 是**截断的**（3,323 条只拿到 1,603 条），且未被写入
+  `.verified.json`；主数据文件完好，不影响训练；
+- 用「知道答案」的 oracle 跑评测集，`r_hard` 上限只有 **95.2 %**：约 5 % 的任务因上游把选项值里的
+  `/` 改写为 ` | ` 而无法得分。任何模型的分数都受这个上限约束；
+- `r_type` 与 `r_price` 在这份数据上**恒为 1**（记录里没有 `query` 字段；价格上限总是高于目标商品价格），
+  真正在优化的只有 `r_att · r_option`。
+
+单卡可行性：1.7B 在 24 GB 上可以全参 SFT（8-bit Adam + 梯度检查点），GRPO 用 LoRA 且
+**直接用基座权重当 reference**（`disable_adapter()`）省掉第二份模型；4B 建议 LoRA/QLoRA，
+8B 只走 QLoRA。参考项目那套 Megatron + SGLang + Pi CLI 的单卡配置**不适用**，
+原因和取舍写在 [docs/harness.md](docs/harness.md)。
 
 ## 许可与数据
 
