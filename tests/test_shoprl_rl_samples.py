@@ -17,16 +17,19 @@ from types import SimpleNamespace
 
 import pytest
 
+from shoprl.data.scripted import ScriptedTeacher
 from shoprl.harness.types import Message
-from tests.oracle_teacher import OracleTeacher
-
-CHECKPOINT = Path(os.environ.get("SHOPRL_TEST_CHECKPOINT", "models/Qwen3-1.7B"))
 
 
 def require_checkpoint() -> Path:
-    if not (CHECKPOINT / "config.json").exists():
-        pytest.skip(f"no checkpoint at {CHECKPOINT}")
-    return CHECKPOINT
+    """Opt-in, like the other checkpoint-backed tests: see docs/devbox.md."""
+    configured = os.environ.get("SHOPRL_TEST_CHECKPOINT")
+    if not configured:
+        pytest.skip("set SHOPRL_TEST_CHECKPOINT to run checkpoint-backed tests")
+    path = Path(configured)
+    if not (path / "config.json").exists():
+        pytest.skip(f"no checkpoint at {path}")
+    return path
 
 
 def require_catalogue():
@@ -102,7 +105,9 @@ def test_a_real_rollout_becomes_non_empty_training_samples():
     tokenizer = require_tokenizer()
     task_id = load_task_pool("dev")[0].task_id
     pool = EnvPool(catalogue, Bm25Index.build(catalogue), capacity=1)
-    runner = EpisodeRunner(OracleTeacher(catalogue, tokenizer, task_id), pool, max_turns=20)
+    runner = EpisodeRunner(
+        ScriptedTeacher(catalogue, task_id, tokenizer), pool, max_turns=20
+    )
 
     trajectory = runner.run(task_id)
 

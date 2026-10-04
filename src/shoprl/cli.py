@@ -61,6 +61,7 @@ def cmd_tasks(args: argparse.Namespace) -> int:
 
 def cmd_collect(args: argparse.Namespace) -> int:
     from shoprl.data.collect import TrajectoryWriter, collect_trajectories
+    from shoprl.data.scripted import scripted_runner
     from shoprl.env.catalog import load_catalog
     from shoprl.env.local import EnvPool
     from shoprl.env.search import Bm25Index
@@ -71,22 +72,31 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
     catalog = load_catalog()
     pool = EnvPool(catalog, Bm25Index.build(catalog), capacity=args.concurrency)
-    backend = OpenAIBackend(
-        model=args.model,
-        base_url=args.base_url,
-        api_key=args.api_key or "EMPTY",
-        timeout=args.timeout,
-    )
-    runner = EpisodeRunner(
-        backend,
-        pool,
-        context_policy=ContextPolicy(keep_recent_tool_results=args.keep_tool_results),
-        max_turns=args.max_turns,
-        max_tool_calls=args.max_tool_calls,
-        temperature=args.temperature,
-        max_tokens=args.max_tokens,
-        show_persona=args.persona,
-    )
+    runner_options = {
+        "context_policy": ContextPolicy(keep_recent_tool_results=args.keep_tool_results),
+        "max_turns": args.max_turns,
+        "max_tool_calls": args.max_tool_calls,
+        "temperature": args.temperature,
+        "max_tokens": args.max_tokens,
+        "show_persona": args.persona,
+    }
+    if args.teacher == "scripted":
+        # Offline dry run: exercises the whole collection path with no API call,
+        # so it can be checked before anyone spends credit on the real thing.
+        runner = scripted_runner(catalog, pool, **runner_options)
+    else:
+        if not args.model:
+            raise SystemExit("--model is required unless --teacher scripted is used")
+        runner = EpisodeRunner(
+            OpenAIBackend(
+                model=args.model,
+                base_url=args.base_url,
+                api_key=args.api_key or "EMPTY",
+                timeout=args.timeout,
+            ),
+            pool,
+            **runner_options,
+        )
     tasks = load_task_pool(args.tasks)
     if args.limit:
         tasks = tasks[: args.limit]
@@ -291,7 +301,7 @@ def build_parser() -> argparse.ArgumentParser:
     collect = sub.add_parser("collect", help="collect teacher trajectories")
     collect.add_argument("--tasks", default="sft")
     collect.add_argument("--out", required=True)
-    collect.add_argument("--model", required=True)
+    collect.add_argument("--model", help="required with --teacher openai")
     collect.add_argument("--base-url", default="https://api.deepseek.com/v1")
     collect.add_argument("--api-key", default="")
     collect.add_argument("--limit", type=int, default=0)
@@ -305,6 +315,12 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--min-reward", type=float, default=0.0)
     collect.add_argument("--timeout", type=float, default=300.0)
     collect.add_argument("--persona", action="store_true", help="show the shopper's persona on reset")
+    collect.add_argument(
+        "--teacher",
+        choices=["openai", "scripted"],
+        default="openai",
+        help="scripted runs the whole path offline, with no API call",
+    )
     collect.set_defaults(func=cmd_collect)
 
     prepare = sub.add_parser("prepare-sft", help="turn trajectories into SFT examples")

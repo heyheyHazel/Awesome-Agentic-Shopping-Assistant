@@ -17,13 +17,21 @@ from pathlib import Path
 
 import pytest
 
-CHECKPOINT = Path(os.environ.get("SHOPRL_TEST_CHECKPOINT", "models/Qwen3-1.7B"))
-
 
 def require_checkpoint() -> Path:
-    if not (CHECKPOINT / "config.json").exists():
-        pytest.skip(f"no checkpoint at {CHECKPOINT}")
-    return CHECKPOINT
+    """The checkpoint to test against, named explicitly.
+
+    Opt-in on purpose: a 151k-vocabulary tokenizer plus torch does not fit the
+    ~0.8 GB this container has left once the editor and its own services are
+    running, so the default suite must not reach for one. CI sets the variable.
+    """
+    configured = os.environ.get("SHOPRL_TEST_CHECKPOINT")
+    if not configured:
+        pytest.skip("set SHOPRL_TEST_CHECKPOINT to run checkpoint-backed tests")
+    path = Path(configured)
+    if not (path / "config.json").exists():
+        pytest.skip(f"no checkpoint at {path}")
+    return path
 
 
 def memory_limit_gb() -> float:

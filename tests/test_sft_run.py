@@ -21,10 +21,19 @@ import pytest
 from shoprl.train.common import ModelConfig
 from shoprl.train.sft import SftConfig, train
 
-CHECKPOINT = Path(os.environ.get("SHOPRL_TEST_CHECKPOINT", "models/Qwen3-1.7B"))
 SEQUENCE = 64
 
 pytestmark = pytest.mark.slow
+
+
+def require_checkpoint() -> Path:
+    configured = os.environ.get("SHOPRL_TEST_CHECKPOINT")
+    if not configured:
+        pytest.skip("set SHOPRL_TEST_CHECKPOINT to run checkpoint-backed tests")
+    path = Path(configured)
+    if not (path / "config.json").exists():
+        pytest.skip(f"no checkpoint at {path}")
+    return path
 
 
 def memory_limit_gb() -> float:
@@ -103,16 +112,15 @@ def tiny_model(tokenizer):
 def test_the_sft_entry_point_trains_and_saves(tmp_path):
     pytest.importorskip("torch")
     transformers = pytest.importorskip("transformers")
-    if not (CHECKPOINT / "config.json").exists():
-        pytest.skip(f"no checkpoint at {CHECKPOINT}")
-
     limit = memory_limit_gb()
     if 0 < limit < 1.5:
         pytest.skip(f"container memory limit is {limit:.1f} GB; too small for a training step")
 
     from transformers import AutoTokenizer
 
-    tokenizer = AutoTokenizer.from_pretrained(CHECKPOINT, trust_remote_code=True)
+    checkpoint = require_checkpoint()
+
+    tokenizer = AutoTokenizer.from_pretrained(checkpoint, trust_remote_code=True)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -122,7 +130,7 @@ def test_the_sft_entry_point_trains_and_saves(tmp_path):
     output_dir = tmp_path / "run"
     config = SftConfig(
         model=ModelConfig(
-            name_or_path=str(CHECKPOINT),
+            name_or_path=str(checkpoint),
             dtype="float32",
             gradient_checkpointing=False,
             lora_rank=0,

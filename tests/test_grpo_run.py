@@ -20,13 +20,21 @@ from types import SimpleNamespace
 
 import pytest
 
+from shoprl.data.scripted import ReluctantTeacher
 from shoprl.train.common import ModelConfig
 from shoprl.train.grpo import GrpoConfig, GrpoTrainer
-from tests.oracle_teacher import ReluctantTeacher
-
-CHECKPOINT = Path(os.environ.get("SHOPRL_TEST_CHECKPOINT", "models/Qwen3-1.7B"))
 
 pytestmark = pytest.mark.slow
+
+
+def require_checkpoint() -> Path:
+    configured = os.environ.get("SHOPRL_TEST_CHECKPOINT")
+    if not configured:
+        pytest.skip("set SHOPRL_TEST_CHECKPOINT to run checkpoint-backed tests")
+    path = Path(configured)
+    if not (path / "config.json").exists():
+        pytest.skip(f"no checkpoint at {path}")
+    return path
 
 
 def memory_limit_gb() -> float:
@@ -61,10 +69,9 @@ def build_trainer(tmp_path, *, max_seq_len: int):
     """A GRPO trainer wired to the real catalogue, a scripted engine and a tiny model."""
     pytest.importorskip("torch")
     pytest.importorskip("transformers")
-    if not (CHECKPOINT / "config.json").exists():
-        pytest.skip(f"no checkpoint at {CHECKPOINT}")
-
     from transformers import AutoTokenizer
+
+    checkpoint = require_checkpoint()
 
     from shoprl.env.catalog import load_catalog
     from shoprl.env.local import EnvPool
@@ -72,13 +79,13 @@ def build_trainer(tmp_path, *, max_seq_len: int):
     from shoprl.env.tasks import load_task_pool
 
     catalogue = load_catalog()
-    tokenizer = AutoTokenizer.from_pretrained(CHECKPOINT, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(checkpoint, trust_remote_code=True)
     task_id = load_task_pool("dev")[0].task_id
     pool = EnvPool(catalogue, Bm25Index.build(catalogue), capacity=1)
 
     config = GrpoConfig(
         model=ModelConfig(
-            name_or_path=str(CHECKPOINT),
+            name_or_path=str(checkpoint),
             dtype="float32",
             gradient_checkpointing=False,
             lora_rank=0,
@@ -100,7 +107,7 @@ def build_trainer(tmp_path, *, max_seq_len: int):
     )
     trainer = GrpoTrainer(
         config,
-        engine=ReluctantTeacher(catalogue, tokenizer, task_id),
+        engine=ReluctantTeacher(catalogue, task_id, tokenizer),
         pool=pool,
         model=tiny_model(tokenizer),
         tokenizer=tokenizer,
@@ -131,7 +138,7 @@ def test_the_grpo_loop_rolls_out_scores_and_checkpoints(tmp_path):
     assert (checkpoint / "run_manifest.json").exists()
     manifest = json.loads((checkpoint / "run_manifest.json").read_text())
     assert manifest["group_size"] == 2
-    assert manifest["base_model"] == str(CHECKPOINT)
+    assert manifest["base_model"] == str(checkpoint)
     assert SimpleNamespace(**manifest).seed == config.seed
 
 

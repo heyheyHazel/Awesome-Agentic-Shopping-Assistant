@@ -24,7 +24,16 @@ from shoprl.harness.backends import ScriptedBackend
 from shoprl.harness.rollout import EpisodeRunner
 from shoprl.harness.types import ModelResponse, ToolCall
 
-CHECKPOINT = Path(os.environ.get("SHOPRL_TEST_CHECKPOINT", "models/Qwen3-1.7B"))
+
+def require_checkpoint() -> Path:
+    """Opt-in, like the other checkpoint-backed tests: see docs/devbox.md."""
+    configured = os.environ.get("SHOPRL_TEST_CHECKPOINT")
+    if not configured:
+        pytest.skip("set SHOPRL_TEST_CHECKPOINT to run checkpoint-backed tests")
+    path = Path(configured)
+    if not (path / "config.json").exists():
+        pytest.skip(f"no checkpoint at {path}")
+    return path
 
 
 def require_catalogue():
@@ -108,12 +117,13 @@ class OracleRunner(EpisodeRunner):
 
 
 def test_teacher_rollouts_become_trainable_turn_examples(tmp_path):
-    catalogue = require_catalogue()
     pytest.importorskip("transformers")
     from transformers import AutoTokenizer
 
-    if not (CHECKPOINT / "config.json").exists():
-        pytest.skip(f"no checkpoint at {CHECKPOINT}")
+    # Check the cheap preconditions before loading a 23k-product catalogue and
+    # building an index over it, so a skip costs nothing.
+    checkpoint = require_checkpoint()
+    catalogue = require_catalogue()
 
     pool = EnvPool(catalogue, Bm25Index.build(catalogue), capacity=2)
     tasks = [load_task_pool("dev")[0]]
@@ -135,7 +145,7 @@ def test_teacher_rollouts_become_trainable_turn_examples(tmp_path):
     from shoprl.data.sft import write_sft_dataset
     from shoprl.train.grpo import TOOLS
 
-    tokenizer = AutoTokenizer.from_pretrained(CHECKPOINT, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(checkpoint, trust_remote_code=True)
     records = [json.loads(path.read_text(encoding="utf-8")) for path in written]
     result = write_sft_dataset(
         records, tokenizer, tmp_path / "prepared", tools=TOOLS, max_tokens=16384
