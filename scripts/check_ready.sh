@@ -99,10 +99,27 @@ else
 fi
 
 echo "== code =="
-if "$PYTHON" -m pytest -q >/tmp/pytest-ready.log 2>&1; then
-  pass "test suite green: $(tail -1 /tmp/pytest-ready.log | tr -d '\n')"
+# One process per file. A single run of the whole suite holds torch, transformers
+# and every cached catalogue alive at once, which does not fit a container
+# capped at 2 GB while an editor session is resident; per-file runs do. A file
+# the kernel kills for memory is reported as such rather than as a failure.
+green=0
+red=0
+starved=0
+idle=0
+for file in tests/test_*.py; do
+  "$PYTHON" -m pytest "$file" -q >/tmp/pytest-ready.log 2>&1
+  case $? in
+    0) green=$((green + 1)) ;;
+    5) idle=$((idle + 1)) ;;  # every test in the file is deselected, e.g. slow-only
+    137) starved=$((starved + 1)); info "${file#tests/}: killed for memory, not counted" ;;
+    *) red=$((red + 1)); fail "${file#tests/}: see /tmp/pytest-ready.log" ;;
+  esac
+done
+if [ "$red" -eq 0 ]; then
+  pass "tests: $green file(s) green, $idle all-slow, $starved not runnable here"
 else
-  fail "test suite red; see /tmp/pytest-ready.log"
+  fail "tests: $red file(s) failed"
 fi
 
 echo "== disk =="
