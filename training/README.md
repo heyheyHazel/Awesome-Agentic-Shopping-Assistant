@@ -16,9 +16,10 @@ scripts and the configs.
 
 | Document | Contents |
 |---|---|
-| [`docs/data-audit.md`](../docs/data-audit.md) | what the ShopSimulator release actually contains, and its two defects |
+| [`docs/data-audit.md`](../docs/data-audit.md) | what the ShopSimulator release actually contains, and what the old converter was dropping |
 | [`docs/harness.md`](../docs/harness.md) | the harness design, what Pi does in the reference project, and what was taken from it |
 | [`docs/training.md`](../docs/training.md) | the pipeline, the method variants, and single-GPU feasibility with memory arithmetic |
+| [`docs/results.md`](../docs/results.md) | what has been measured, what has not, and the rules a comparable row has to follow |
 
 ## Quick start
 

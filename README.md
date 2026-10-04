@@ -42,7 +42,8 @@ decides whether a step takes minutes or tens of minutes.
 Start here: [`docs/training.md`](docs/training.md) for the pipeline and the
 memory arithmetic, [`docs/harness.md`](docs/harness.md) for what was taken from
 the Pi/Slime reference and what was replaced,
-[`docs/data-audit.md`](docs/data-audit.md) for the numbers above.
+[`docs/data-audit.md`](docs/data-audit.md) for the numbers above, and
+[`docs/results.md`](docs/results.md) for what has been measured and what has not.
 
 CI runs the whole suite plus a real HTTP conversation against a canned model, so
 a fresh clone with no GPU, no API key and no checkpoint still verifies itself.
