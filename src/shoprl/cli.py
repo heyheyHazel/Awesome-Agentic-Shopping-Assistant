@@ -242,6 +242,7 @@ def cmd_grpo(args: argparse.Namespace) -> int:
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
+    from shoprl.data.scripted import scripted_runner
     from shoprl.env.catalog import load_catalog
     from shoprl.env.local import EnvPool
     from shoprl.env.search import Bm25Index
@@ -252,18 +253,30 @@ def cmd_eval(args: argparse.Namespace) -> int:
 
     catalog = load_catalog()
     pool = EnvPool(catalog, Bm25Index.build(catalog), capacity=args.concurrency)
-    backend = OpenAIBackend(
-        model=args.model, base_url=args.base_url, api_key=args.api_key or "EMPTY"
-    )
-    runner = EpisodeRunner(
-        backend,
-        pool,
-        context_policy=ContextPolicy(keep_recent_tool_results=args.keep_tool_results),
-        max_turns=args.max_turns,
-        temperature=args.temperature,
-        max_tokens=args.max_tokens,
-        show_persona=args.persona,
-    )
+    runner_options = {
+        "context_policy": ContextPolicy(keep_recent_tool_results=args.keep_tool_results),
+        "max_turns": args.max_turns,
+        "temperature": args.temperature,
+        "max_tokens": args.max_tokens,
+        "show_persona": args.persona,
+    }
+    if args.teacher == "scripted":
+        # A reference row with no model and no API call: what a policy that plays
+        # the page correctly scores on this split. Whatever a real checkpoint
+        # scores, it should be compared against this, not against zero.
+        runner = scripted_runner(catalog, pool, **runner_options)
+        label = args.label or "scripted"
+    else:
+        if not args.model:
+            raise SystemExit("--model is required unless --teacher scripted is used")
+        runner = EpisodeRunner(
+            OpenAIBackend(
+                model=args.model, base_url=args.base_url, api_key=args.api_key or "EMPTY"
+            ),
+            pool,
+            **runner_options,
+        )
+        label = args.label or args.model
     metrics = evaluate(
         runner,
         EvalConfig(
@@ -273,7 +286,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
             limit=args.limit,
             concurrency=args.concurrency,
             temperature=args.temperature,
-            label=args.label or args.model,
+            label=label,
         ),
     )
     print(json.dumps(metrics, ensure_ascii=False, indent=2))
@@ -374,7 +387,7 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate = sub.add_parser("eval", help="roll a policy out and score it")
     evaluate.add_argument("--tasks", default="official_test")
     evaluate.add_argument("--out", required=True)
-    evaluate.add_argument("--model", required=True)
+    evaluate.add_argument("--model", help="required with --teacher openai")
     evaluate.add_argument("--base-url", default="http://127.0.0.1:8000/v1")
     evaluate.add_argument("--api-key", default="")
     evaluate.add_argument("--label", default="")
@@ -386,6 +399,12 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--max-turns", type=int, default=30)
     evaluate.add_argument("--keep-tool-results", type=int, default=3)
     evaluate.add_argument("--persona", action="store_true", help="show the shopper's persona on reset")
+    evaluate.add_argument(
+        "--teacher",
+        choices=["openai", "scripted"],
+        default="openai",
+        help="scripted scores a reference policy offline, with no API call",
+    )
     evaluate.set_defaults(func=cmd_eval)
     return parser
 

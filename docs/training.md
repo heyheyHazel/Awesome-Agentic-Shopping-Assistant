@@ -101,6 +101,32 @@ Three numbers in `train_log.jsonl` decide whether a run is worth continuing:
 
 ### Method variants
 
+### Stage 5 — evaluation (`05_eval.sh`)
+
+Scoring a checkpoint needs a served model, so this stage is the one that cannot
+be checked without hardware. It can still be checked without a *policy*:
+
+```bash
+DRY_RUN=1 LIMIT=20 bash training/scripts/05_eval.sh
+```
+
+scores a scripted reference policy that plays the page it was shown. It needs no
+model, no API call and no GPU, and it produces the row a real checkpoint has to
+beat on the same sample:
+
+| Policy | done | `r_loose` | `r_hard` | `r_success` |
+|---|---:|---:|---:|---:|
+| scripted reference, first 20 `official_test` tasks | 0.80 | 0.757 | 0.750 | 0.750 |
+
+That number is a floor for the harness, not a ceiling: the scripted policy
+searches once with the raw instruction and pages forward, while the environment's
+measured ceiling for a policy that can re-query is 95.2 % `r_hard`
+(`docs/data-audit.md`). A trained model that scores below 0.75 is losing to a
+policy with no language ability at all.
+
+`01_collect_teacher.sh` has the same `DRY_RUN=1` switch, so both stages that
+would otherwise be unverifiable before hardware lands can be exercised offline.
+
 The RLVR path is the default. The distillation variants differ only in what is
 laid on top of the same rollouts:
 
@@ -204,4 +230,3 @@ The oracle ceiling on this environment is 95.2 % `r_hard` and 100 % `done`
 positive reward, SFT 72.5 %, RL 90.5 %; strict success 0 % → 10.5 % → 31.0 %.
 A run that beats 90.5 % positive reward is close to the ceiling, not to the
 middle of the field.
-
