@@ -86,10 +86,27 @@ new case in `tests/test_shoprl_data.py` cover them, and all of them pass here.
 ## Memory
 
 `/sys/fs/cgroup/memory.max` is 2 GB with no swap until a GPU is allocated, which
-is far below what a forward pass through a 151k-vocabulary head needs. The
-end-to-end gradient test therefore skips itself while the cap is low and runs
-once the card — and with it the memory — is available. Nothing else in the suite
-needs more than a few hundred MB.
+is far below what a forward pass through a 151k-vocabulary head needs.
+
+What actually consumes it is worth recording, because it is not the tests:
+
+| Holder | Resident |
+|---|---|
+| VS Code Remote server processes | ~1.2 GB |
+| jupyter-lab, tensorboard, autopanel (image services) | ~0.4 GB |
+| left for whatever is being run | **~0.3–0.5 GB** |
+
+The ceiling therefore moves with the editor session. With it closed the full
+suite runs in one process in about 40 seconds; with it open, importing a
+tokenizer is enough to be killed. Two consequences are built into the repository:
+
+- `scripts/check_ready.sh` runs one test file per process and reports a file the
+  kernel killed as INFO, so the gate distinguishes "the tests failed" from "this
+  box could not run them";
+- checkpoint-backed tests are opt-in through `SHOPRL_TEST_CHECKPOINT`, so the
+  default suite never reaches for a 151k-vocabulary tokenizer.
+
+Nothing else in the suite needs more than a few hundred MB.
 
 ## What is deliberately absent
 
