@@ -65,9 +65,16 @@ blocks), the harness (loop, context policy, memory, tool registry), trajectory
 collection, turn-level SFT conversion with template verification, and the
 official metrics.
 
-GPU-side trainers are implemented but **have not been executed here**: this
-repository was developed on an Apple M3 with no CUDA device, so `train_sft` and
-`train_grpo` have been reviewed and their components unit-tested, not run to
-convergence. The first thing to do on a GPU host is the `smoke` preset, then a
-5-step RL run with `group_size 2`. No numbers in this repository come from a
-training run.
+Both trainers have been executed, but **not on a GPU and not to convergence**.
+`tests/test_sft_run.py` drives `train()` through one real optimiser step on a
+two-layer model built from a real checkpoint's configuration, and
+`tests/test_grpo_run.py` drives `GrpoTrainer.train()` through one full loop —
+task selection, group rollouts, advantage centring, logging and checkpointing —
+against the real catalogue. Both pass.
+
+What has never happened: a real checkpoint loading real weights, and a gradient
+step over a real 2,700-token turn. That needs a card, and it is the first thing
+to do on a GPU host — the `smoke` preset, then a 5-step RL run with `group_size 2`.
+
+No number in this repository comes from a training run. The one measured policy
+number is the scripted reference in `docs/training.md`, which needs no model.
