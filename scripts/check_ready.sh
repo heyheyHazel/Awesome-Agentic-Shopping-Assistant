@@ -10,7 +10,15 @@
 set -uo pipefail
 
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PYTHON="${PYTHON:-$PROJECT_DIR/.venv/bin/python}"
+# Prefer the project venv when there is one, otherwise whatever python is on
+# PATH — CI installs into the runner's interpreter and has no .venv.
+if [ -z "${PYTHON:-}" ]; then
+  if [ -x "$PROJECT_DIR/.venv/bin/python" ]; then
+    PYTHON="$PROJECT_DIR/.venv/bin/python"
+  else
+    PYTHON="$(command -v python3 || command -v python)"
+  fi
+fi
 MODEL="${MODEL:-Qwen3-1.7B}"
 FAILED=0
 

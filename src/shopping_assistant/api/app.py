@@ -58,8 +58,8 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(
-    title="Agentic Shopping Assistant",
-    description="One tool-calling shopping agent over a 23k-product catalog.",
+    title="Awesome Agentic Shopping Assistant",
+    description="An Agentic shopping agent over a 23k-product ShopSimulator catalogue.",
     version="3.0.0",
     lifespan=lifespan,
 )

@@ -1,14 +1,17 @@
-# Agentic Shopping Assistant
+# Awesome Agentic Shopping Assistant
 
 [![CI](https://github.com/heheyHazel/Awesome-Agentic-Shopping-Assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/heheyHazel/Awesome-Agentic-Shopping-Assistant/actions/workflows/ci.yml)
 
-单 Agent + 多工具的电商导购系统：**一个 tool-calling agent** 负责理解需求、改写查询、挑选商品与撰写回复；画像、召回、库存这些它没法凭空知道的东西做成确定性工具。全过程通过 SSE 实时推送，左栏如实展示哪些工具被调用了。后端 FastAPI，前端 React 19 + TypeScript。
+**Agentic 导购**的开源实现：一个可交互的导购 agent、一套自建 harness、一个 ShopSimulator 环境，以及围绕它的后训练流水线。三部分共用同一个 agent 循环——服务侧把循环的事件推成 SSE，训练侧留下 `Trajectory`，所以**你看到的 agent 就是被训练的那个**。
+
+面向购物任务的 agent 要做的事比单轮问答多：把一句话的需求拆成检索条件、在几万件高度相似的商品里做深搜、读顾客画像、核对库存、把约束一板一眼地守住。这个仓库把这条链路完整实现出来，并让它可训练、可评测、可复现。
 
 <details>
 <summary><b>English summary</b></summary>
 
-An interactive shopping agent over the Chinese ShopSimulator catalogue, plus the
-harness and post-training pipeline behind it. The point of the repository is that
+An open implementation of **agentic shopping**: an interactive shopping agent, a
+harness built for it, a ShopSimulator environment, and the post-training pipeline
+around all three. The point of the repository is that
 **the app and the training run share one agent loop**: serving pushes the loop's
 events onto an SSE stream, training keeps the `Trajectory` objects instead, so
 the model that is being trained is the model being demoed.
@@ -17,7 +20,7 @@ Three pieces:
 
 | | |
 |---|---|
-| **Interactive app** | FastAPI + React 19, one tool-calling loop over 23,421 real Chinese products, hybrid keyword/vector recall, live SSE |
+| **Interactive app** | FastAPI + React 19, an Agentic shopping loop over 23,421 real Chinese products, hybrid keyword/vector recall, live SSE |
 | **Harness** | `src/shoprl/`: loop, deterministic context policy, session memory, tool registry, and backends for OpenAI-compatible endpoints, `transformers` and vLLM |
 | **Training stack** | teacher collection → SFT → on-policy GRPO on verifiable rewards, with OPD / OPSD / RLSD distillation terms, and evaluation against the official ShopSimulator split |
 

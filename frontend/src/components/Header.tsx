@@ -13,7 +13,7 @@ export default function Header() {
         <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-brand to-vip text-white shadow-sm">
           <Bot size={22} />
         </span>
-        <h1 className="text-xl font-semibold tracking-tight lg:text-2xl">Agentic Shopping Assistant</h1>
+        <h1 className="text-xl font-semibold tracking-tight lg:text-2xl">Awesome Agentic Shopping Assistant</h1>
       </div>
 
       <div className="flex flex-wrap items-center gap-3 lg:justify-end">

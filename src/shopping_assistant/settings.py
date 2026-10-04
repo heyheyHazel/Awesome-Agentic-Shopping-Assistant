@@ -17,7 +17,7 @@ DEFAULT_MODELS_DIR = REPO_ROOT / "models"
 
 
 class Settings(BaseSettings):
-    app_name: str = "Agentic Shopping Assistant"
+    app_name: str = "Awesome Agentic Shopping Assistant"
 
     # Downloaded source data and the generated catalogue / vector index.
     data_dir: Path = DEFAULT_DATA_DIR

@@ -9,7 +9,15 @@
 set -uo pipefail
 
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-PYTHON="${PYTHON:-$PROJECT_DIR/.venv/bin/python}"
+# Prefer the project venv when there is one, otherwise whatever python is on
+# PATH — CI installs into the runner's interpreter and has no .venv.
+if [ -z "${PYTHON:-}" ]; then
+  if [ -x "$PROJECT_DIR/.venv/bin/python" ]; then
+    PYTHON="$PROJECT_DIR/.venv/bin/python"
+  else
+    PYTHON="$(command -v python3 || command -v python)"
+  fi
+fi
 PORT="${PORT:-8077}"
 STUB_PORT="${STUB_PORT:-9099}"
 FAILED=0
@@ -42,7 +50,14 @@ for _ in $(seq 1 60); do
   if curl -sS -m 2 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then ready=1; break; fi
   sleep 1
 done
-if [ "$ready" -eq 1 ]; then pass "server up on :$PORT"; else fail "server did not start (see /tmp/check-server-app.log)"; exit 1; fi
+if [ "$ready" -ne 1 ]; then
+  fail "server did not start"
+  # Print the logs: on a CI runner this is the only copy.
+  echo "--- stub ---"; tail -n 20 /tmp/check-server-stub.log 2>/dev/null
+  echo "--- app ---";  tail -n 30 /tmp/check-server-app.log 2>/dev/null
+  exit 1
+fi
+pass "server up on :$PORT"
 
 health=$(curl -sS "http://127.0.0.1:$PORT/health")
 echo "$health" | grep -q '"status":"healthy"' && pass "health" || fail "health: $health"
